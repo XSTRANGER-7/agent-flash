@@ -314,6 +314,9 @@ func (e *Executor) Buy(ctx context.Context, w *wallet.Wallet, usd, tp, sl, entry
 	targetsNote := ""
 	if market {
 		if err := e.marketGuards(q, refPrice, p, opts.MaxCostPct); err != nil {
+			if errors.Is(err, ErrCostGuard) && req.OrderType == "twap" {
+				err = fmt.Errorf("%w. A DCA order pays Flash's cost on each of its %d slices, so it needs a bigger size; a market order costs one slice", err, req.TwapBucketCount)
+			}
 			return nil, err
 		}
 		if bracket && e.cfg.NetTargets && !opts.NoNetTargets && p.CostPct > 0 {

@@ -486,7 +486,8 @@ func (e *Engine) RunAgents(ctx context.Context) {
 					// Real money only moves when a person asks (test trade) until
 					// LIVE_AGENTS=true. The signal is still shown, once an hour.
 					if e.shouldPostBlock(id, "LIVE_AGENTS_OFF", time.Now()) {
-						e.Feed.Publish(feed.Post{Kind: "trade_blocked", AgentID: id, Text: fmt.Sprintf("%s has a signal (%s). Live auto-trading is off, so no real order was placed.", prof.Name, sig.Reason), Data: map[string]any{"code": "LIVE_AGENTS_OFF"}})
+						// Information, not an error: the operator chose to keep real-money auto-trading off.
+						e.Feed.Publish(feed.Post{Kind: "signal_paused", AgentID: id, Text: fmt.Sprintf("%s signal: %s No real order: auto-trading with real money is switched off (LIVE_AGENTS=false).", prof.Name, sig.Reason), Data: map[string]any{"code": "LIVE_AGENTS_OFF"}})
 					}
 					continue
 				}

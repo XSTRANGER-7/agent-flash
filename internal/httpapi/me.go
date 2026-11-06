@@ -433,6 +433,25 @@ func (s *Server) mePlan(w http.ResponseWriter, r *http.Request, addr string) {
 	s.planCreate(w, r2)
 }
 
+// mePlanAction lets the owner pause, resume, stop or check their own plan.
+func (s *Server) mePlanAction(w http.ResponseWriter, r *http.Request, addr string) {
+	wl, ok, err := s.myWallet(addr)
+	if err != nil || !ok {
+		writeErr(w, 409, "create your account first")
+		return
+	}
+	p, found := s.E.Store.Plan(r.PathValue("id"))
+	if !found {
+		writeErr(w, 404, "plan not found")
+		return
+	}
+	if p.WalletID != wl.ID {
+		writeErr(w, 403, "this plan is not yours")
+		return
+	}
+	s.planAction(w, r)
+}
+
 // meStop unlinks the account from its agent. Open trades keep their TP / SL.
 func (s *Server) meStop(w http.ResponseWriter, r *http.Request, addr string) {
 	wl, ok, err := s.myWallet(addr)

@@ -555,6 +555,7 @@ const KIND = {
   trade_placed: ["Buy", "buy"], trade_filled: ["Fill", "buy"], trade_closed: ["Exit", "exit"],
   copy_placed: ["Copy", "copy"], trade_blocked: ["Block", "block"], copy_blocked: ["Block", "block"],
   approval: ["Vote", "vote"], follow: ["Follow", "copy"],
+  signal_paused: ["Signal", "note"], // a signal while real-money auto-trading is switched off: information, not an error
 };
 const kindTag = (k) => { const [label, cls] = KIND[k] || ["Note", "note"]; return `<span class="tag tag-${cls}">${esc(label)}</span>`; };
 
@@ -946,8 +947,8 @@ async function pageAgent(page, id) {
       <div>
         <div class="section-head"><h2>Equity</h2></div>
         ${equityChart(data.equity)}
-        <div class="section-head sticky-head section"><h2>Trades</h2><span class="muted small num">${esc(data.trades.length)} shown</span></div>
-        ${data.trades.length ? `<ul class="trades" data-stagger>${data.trades.map(tradeRow).join("")}</ul>` : emptyState("No trades yet")}
+        <div class="section-head sticky-head section"><h2>Trades</h2><span class="muted small num">${esc((data.trades || []).length)} shown</span></div>
+        ${(data.trades || []).length ? `<ul class="trades" data-stagger>${data.trades.map(tradeRow).join("")}</ul>` : emptyState("No trades yet", "It trades when its strategy fires.")}
       </div>
       <aside data-copy-panel></aside>
     </div>
@@ -1850,7 +1851,21 @@ async function pagePlanNew(page) {
       <p class="lede" data-reveal>Six quick steps. Every order has a stop loss.</p></header>
     <div class="section-tight" data-builder><div class="skel skel-row"></div><div class="skel skel-row"></div></div>`;
   const box = $("[data-builder]", page);
-  if (!isOperator()) { box.innerHTML = signInPrompt("create a plan", "Each plan gets its own new sub-wallet."); return {}; }
+  // Anyone can build one: people sign in with their wallet and the plan runs on
+  // their own arena account (payout locked to them). Operators keep the
+  // admin path, where each plan gets a new sub-wallet.
+  const asUser = !isOperator();
+  if (asUser && !(wallet.address && meToken())) {
+    box.innerHTML = `<div class="panel acct-intro" data-reveal><p class="eyebrow">Your own auto-trader</p><h3>Sign in with your wallet to build one</h3>
+      <p class="muted small">It trades from your arena account with USDC only, no gas. Money can only go back to your wallet.</p>
+      <button type="button" class="btn btn-primary btn-block" data-plan-signin>Connect &amp; sign in</button>
+      <p class="footnote">Operator? <button type="button" class="btn-link" data-signin-open>Use the admin token</button></p></div>`;
+    $("[data-plan-signin]", box).addEventListener("click", async (e) => {
+      const done = busy(e.currentTarget, "Check your wallet…");
+      try { await ensureBase(); if (await meSignIn()) route(); } catch (err) { toast(err?.code ? walletErr(err) : err.message, "err"); } finally { done(); }
+    });
+    return {};
+  }
   let meta;
   try { [meta] = await Promise.all([api("/v1/tokens"), state.flash ? null : refreshStats()]); } catch (err) { box.innerHTML = errorState(err); return {}; }
   const L = meta.limits || {}, tokens = (meta.tokens || []).filter((t) => t.symbol);
@@ -1907,15 +1922,16 @@ async function pagePlanNew(page) {
       <fieldset class="step"><legend><span class="step-n">6</span>You</legend>
         <div class="form-grid form-2">
           ${fld("name", "Plan name", 'maxlength="40" autocomplete="off" placeholder="BTC steady"', "", "Just for you, shown on the plan")}
-          ${fld("owner", "Your name", 'maxlength="40" autocomplete="name"', "", "Shown as the plan's owner")}
-          ${fld("payout", "Payout address", 'class="mono" maxlength="42" spellcheck="false" autocomplete="off" placeholder="0x…"', "", "Withdrawals only ever go here. It can't be changed later.", "span-2")}
+          ${asUser ? `<p class="small muted">Runs on your arena account. Money can only go back to ${esc(short(wallet.address))}.</p>`
+            : `${fld("owner", "Your name", 'maxlength="40" autocomplete="name"', "", "Shown as the plan's owner")}
+          ${fld("payout", "Payout address", 'class="mono" maxlength="42" spellcheck="false" autocomplete="off" placeholder="0x…"', "", "Withdrawals only ever go here. It can't be changed later.", "span-2")}`}
         </div>
       </fieldset>
     </div>
     <aside class="builder-side">
       <div class="panel summary" data-summary aria-live="polite"></div>
       <button class="btn btn-primary btn-block" type="submit" data-submit>Start plan</button>
-      <p class="mode-note">${mode ? `<span class="mini ${mode === "live" ? "mini-live" : "mini-paper"}">${esc(MODE_INFO[mode]?.badge || mode)}</span>` : ""}<span>${esc({ paper: "Budget funded with paper USDC", dry: "Signed, not sent", live: "You fund it with real USDC" }[mode] || "")}</span></p>
+      <p class="mode-note">${mode ? `<span class="mini ${mode === "live" ? "mini-live" : "mini-paper"}">${esc(MODE_INFO[mode]?.badge || mode)}</span>` : ""}<span>${esc(asUser ? ({ paper: "Uses your account (paper USDC)", dry: "Signed, not sent", live: "Uses your account's USDC" }[mode] || "") : ({ paper: "Budget funded with paper USDC", dry: "Signed, not sent", live: "You fund it with real USDC" }[mode] || ""))}</span></p>
     </aside>
   </form>
   <div class="mobile-cta"><span class="num small" data-mini-sum></span><button class="btn btn-primary" type="submit" form="plan-form" data-submit>Start plan</button></div>`;
@@ -1954,8 +1970,10 @@ async function pagePlanNew(page) {
     between("lossLimitPct", 0, 100, "0 to 100");
     if (!(Number.isFinite(v.durationHours) && v.durationHours >= 0.25 && v.durationHours <= maxDur)) e.customHours = "15 minutes to 30 days";
     if (!v.name) e.name = "Give it a name";
-    if (!v.owner) e.owner = "Add your name";
-    if (!isAddr(v.payout)) e.payout = "A 0x address with 40 hex characters";
+    if (!asUser) {
+      if (!v.owner) e.owner = "Add your name";
+      if (!isAddr(v.payout)) e.payout = "A 0x address with 40 hex characters";
+    }
     return e;
   };
   const showErrors = (e) => {
@@ -2006,7 +2024,9 @@ async function pagePlanNew(page) {
       toast("Check the highlighted fields.", "err");
       return;
     }
-    const ok = await confirmDialog("Start this plan?", `It trades from a new wallet of its own. Withdrawals can only go to ${v.payout}. That can't be changed later.`, "Start plan", { money: true });
+    const ok = await confirmDialog("Start this plan?", asUser
+      ? `It trades from your arena account, every order with a stop loss. Money can only go back to ${short(wallet.address)}.`
+      : `It trades from a new wallet of its own. Withdrawals can only go to ${v.payout}. That can't be changed later.`, "Start plan", { money: true });
     if (!ok) return;
     const btns = $$("[data-submit]", page);
     const dones = btns.map((b) => busy(b, "Starting…"));
@@ -2014,6 +2034,17 @@ async function pagePlanNew(page) {
     const body = { ...rest, durationHours, intervalMin: v.strategy === "interval" ? v.intervalMin : 0,
       limitPct: v.style === "limit" ? v.limitPct : 0, twapMinutes: v.style === "twap" ? v.twapMinutes : 0, stopPct: v.style === "stop" ? v.stopPct : 0,
       protect: v.style === "stop" ? v.protect : "bracket", trailPct: v.style === "stop" && v.protect === "trailing" ? v.trailPct : 0 };
+    if (asUser) {
+      try {
+        const { owner, payout, ...mine } = body;
+        void owner; void payout; // the server sets both to the signed-in wallet
+        await api("/v1/me/account", { method: "POST", me: true, body: {} }); // no-op when it exists
+        const r = await api("/v1/me/plans", { method: "POST", me: true, body: mine });
+        toast("Your auto-trader is running on your account.", "ok");
+        location.hash = "#/plan/" + enc(r.plan?.id || "");
+      } catch (err) { toast(err.message, "err"); dones.forEach((d) => d()); }
+      return;
+    }
     try {
       const r = await api("/v1/admin/plans", { method: "POST", admin: true, body });
       const p = r.plan || {};
@@ -2062,13 +2093,15 @@ function renderPlan(body, d, refresh) {
   const start = new Date(p.startsAt).getTime(), end = new Date(p.endsAt).getTime();
   const timeShare = end > start ? Math.min(100, Math.max(0, ((Date.now() - start) / (end - start)) * 100)) : 100;
   const op = isOperator(), mode = modeOf();
+  // The owner (signed in with the wallet whose account runs the plan) can manage it too.
+  const mine = !op && !!meToken() && !!wallet.address && p.walletId === "u-" + wallet.address.slice(2, 12).toLowerCase();
   document.title = `${p.name} · Agent Arena`;
   body.innerHTML = `
     <header class="plan-head">
       <div class="plan-head-main"><p class="eyebrow">${esc(p.owner)} · ${esc(p.token)} · ${esc(stratLabel(p.strategy))} · ${esc(styleLabel(p.style))}</p>
         <div class="trade-title"><h1>${esc(p.name)}</h1>${planChip(p.status)}</div>
         ${p.statusReason && !live ? `<p class="muted small status-why">${esc(cap(p.statusReason))}</p>` : ""}</div>
-      <div class="btn-row plan-actions">${op && !over ? `
+      <div class="btn-row plan-actions">${(op || mine) && !over ? `
         <button class="btn btn-primary btn-sm" data-pa="check" ${live ? "" : "disabled"}>Check now</button>
         <button class="btn btn-ghost btn-sm" data-pa="${live ? "pause" : "resume"}">${live ? "Pause" : "Resume"}</button>
         <button class="btn btn-danger btn-sm" data-pa="stop">Stop</button>` : ""}<button class="btn btn-ghost btn-sm" data-pshare>Share</button></div>
@@ -2126,7 +2159,8 @@ function renderPlan(body, d, refresh) {
     if (act === "stop" && !(await confirmDialog("Stop this plan?", "No new trades. An open trade keeps its take profit and stop loss.", "Stop plan"))) return;
     const done = busy(b, { check: "Checking…", pause: "Pausing…", resume: "Resuming…", stop: "Stopping…" }[act]);
     try {
-      const r = await api(`/v1/admin/plans/${enc(p.id)}/${act}`, { method: "POST", admin: true });
+      const r = mine ? await api(`/v1/me/plans/${enc(p.id)}/${act}`, { method: "POST", me: true })
+        : await api(`/v1/admin/plans/${enc(p.id)}/${act}`, { method: "POST", admin: true });
       const msg = act === "check" ? cap(r?.plan?.lastSignal || "Checked") : { pause: "Plan paused", resume: "Plan resumed", stop: "Plan stopped" }[act];
       toast(msg, "ok");
     } catch (err) { toast(err.message, "err"); }

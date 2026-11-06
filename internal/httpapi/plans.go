@@ -260,7 +260,11 @@ func (s *Server) planAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		status := map[string]string{"pause": "paused", "resume": "active", "stop": "stopped"}[a]
-		p, _ = s.E.Store.UpdatePlan(id, func(x *store.Plan) { x.Status, x.StatusReason = status, "by the operator" })
+		by := "by the operator"
+		if strings.HasPrefix(r.URL.Path, "/v1/me/") {
+			by = "by its owner"
+		}
+		p, _ = s.E.Store.UpdatePlan(id, func(x *store.Plan) { x.Status, x.StatusReason = status, by })
 		s.E.Feed.Publish(feed.Post{Kind: "follow", Text: fmt.Sprintf("%s's plan \"%s\" is %s", p.Owner, p.Name, status)})
 	case "check":
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)

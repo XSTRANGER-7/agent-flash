@@ -217,10 +217,11 @@ func (st *Store) Trade(id string) (*Trade, bool) {
 }
 
 // Trades returns newest first, filtered by agent (optional).
+// Lists are never nil, so the API sends [] (not null) when there is nothing.
 func (st *Store) Trades(agentID string, limit int) []Trade {
 	st.mu.RLock()
 	defer st.mu.RUnlock()
-	var out []Trade
+	out := []Trade{}
 	for _, t := range st.s.Trades {
 		if agentID == "" || t.AgentID == agentID {
 			out = append(out, *t)
@@ -268,7 +269,7 @@ func (st *Store) Unfollow(follower, agent string) bool {
 func (st *Store) Followers(agentID string) []Follow {
 	st.mu.RLock()
 	defer st.mu.RUnlock()
-	var out []Follow
+	out := []Follow{}
 	for _, f := range st.s.Follows {
 		if f.AgentID == agentID && f.Active {
 			out = append(out, *f)
@@ -344,7 +345,7 @@ func (st *Store) AddEquity(walletID string, usd float64) {
 func (st *Store) Equity(walletID string) []EquityPoint {
 	st.mu.RLock()
 	defer st.mu.RUnlock()
-	return append([]EquityPoint(nil), st.s.Equity[walletID]...)
+	return append([]EquityPoint{}, st.s.Equity[walletID]...)
 }
 
 // Profile returns a copy of a wallet's profile.
@@ -410,7 +411,7 @@ func (st *Store) CopySpentToday(id string) float64 {
 func (st *Store) FollowsOf(walletID string) []Follow {
 	st.mu.RLock()
 	defer st.mu.RUnlock()
-	var out []Follow
+	out := []Follow{}
 	for _, f := range st.s.Follows {
 		if f.FollowerID == walletID && f.Active {
 			out = append(out, *f)

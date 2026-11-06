@@ -804,11 +804,14 @@ func gaslessAccount() {
 		fmt.Sprintf("HTTP %d, plan wallet %s %s", c, s(pl, "plan", "walletId"), errMsg(pl)))
 	c, _ = meDo("POST", "/v1/me/invest", M{"agentId": "trendhunter", "mode": "invest"}, tok)
 	check("invest refused while the plan runs", c == 409, fmt.Sprint("HTTP ", c))
+	stok, _ := signIn(stranger)
 	if id := s(pl, "plan", "id"); id != "" {
-		post("/v1/admin/plans/"+id+"/stop", nil)
+		c, _ = meDo("POST", "/v1/me/plans/"+id+"/stop", nil, stok)
+		check("a stranger cannot stop your plan", c == 403 || c == 409, fmt.Sprint("HTTP ", c))
+		c, ps := meDo("POST", "/v1/me/plans/"+id+"/stop", nil, tok)
+		check("the owner stops their own plan", c == 200 && s(ps, "plan", "status") == "stopped", fmt.Sprintf("HTTP %d, %s", c, s(ps, "plan", "status")))
 	}
 
-	stok, _ := signIn(stranger)
 	_, other := meDo("GET", "/v1/me", nil, stok)
 	check("another wallet cannot see or use it", path(other, "account") == nil, "stranger sees no account")
 
