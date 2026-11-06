@@ -295,6 +295,36 @@ curl -X POST localhost:8080/v1/admin/propose -H "Authorization: Bearer $ADMIN_TO
 - Flash response fields not fully documented publicly (`approveTx` shape,
   bracket order id) are parsed defensively; check logs on your first live trade.
 
+## Deploy
+
+The repo never contains secrets: `.env`, `wallets.json` and `data/` are gitignored.
+Give them to the server at run time.
+
+**Docker (any VPS, Fly.io, Railway, Render):**
+
+```bash
+# the build runs every unit test
+docker build -t agent-arena .
+# .env holds FLASH_API_KEY, ADMIN_TOKEN, MODE, ...
+docker run -d --name arena -p 8080:8080 \
+  --env-file .env \
+  -e HTTP_ADDR=:8080 -e PUBLIC_URL=https://your-domain \
+  -v /srv/arena/wallets.json:/app/secrets/wallets.json:ro \
+  -v arena-data:/app/data \
+  agent-arena
+```
+
+- **`wallets.json`:** create it once with `arena keygen` on a trusted machine, back it
+  up, and mount it read-only. If the platform cannot mount files, store it as a secret
+  file at `/app/secrets/wallets.json`.
+- **`arena-data`:** a persistent volume. Trades, plans, equity and the paper ledger live
+  there; without a volume they reset on every deploy.
+- **Mode:** the image defaults to `MODE=paper`. Set `MODE=live` only after a funded $1 test.
+- **HTTPS:** put the platform's HTTPS in front, or use `cloudflared tunnel --url http://localhost:8080`.
+- **Health check:** `GET /healthz`. `GET /readyz` returns 503 until the price feed is fresh.
+- **Optional:** run `arkiv-sync` next to it and set `ARKIV_SYNC_URL`. Set
+  `DISCORD_WEBHOOK_URL` or `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` for the signal bot.
+
 ## Tests
 
 ```bash
