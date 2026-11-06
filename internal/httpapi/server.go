@@ -94,6 +94,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /v1/admin/propose", s.admin(s.propose))
 	m.HandleFunc("POST /v1/admin/trades/{id}/cancel", s.admin(s.cancel))
 	m.HandleFunc("POST /v1/admin/trades/{id}/exit", s.admin(s.exit))
+	m.HandleFunc("POST /v1/admin/trades/{id}/bracket", s.admin(s.rebracket))
 	m.HandleFunc("GET /v1/admin/wallets", s.admin(s.walletsList))
 	m.HandleFunc("POST /v1/admin/wallets", s.admin(s.walletCreate))
 	m.HandleFunc("GET /v1/admin/wallets/{id}", s.admin(s.walletGet))
@@ -580,6 +581,30 @@ func (s *Server) exit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "orderId": t.ExitOrderID, "trade": t})
+}
+
+// rebracket moves the take profit and stop loss of a live trade.
+func (s *Server) rebracket(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		TakeProfit float64 `json:"takeProfit"`
+		StopLoss   float64 `json:"stopLoss"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
+	defer cancel()
+	t, err := s.E.Rebracket(ctx, r.PathValue("id"), in.TakeProfit, in.StopLoss)
+	if err != nil {
+		code := 400
+		if errors.Is(err, engine.ErrNotExitable) {
+			code = 409
+		}
+		writeErr(w, code, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "trade": t})
 }
 
 // stats is the arena summary for the home screen.

@@ -558,3 +558,48 @@ func (e *Engine) cancelQuietly(ctx context.Context, w *wallet.Wallet, orderID st
 		e.Log.Debug("sibling cancel", "order", orderID, "err", err)
 	}
 }
+
+// Rebracket changes the take profit and stop loss of a live trade (Flash
+// PATCH on its bracket, signed by the trade's wallet). The stop stays below
+// the price now and within the arena's maximum stop distance; the take profit
+// stays above it.
+func (e *Engine) Rebracket(ctx context.Context, id string, tp, sl float64) (*store.Trade, error) {
+	tr, ok := e.Store.Trade(id)
+	if !ok {
+		return nil, fmt.Errorf("trade %s not found", id)
+	}
+	if tr.Status != "filled" || tr.BracketOrderID == "" || tr.ProtectMode == "trailing" || tr.ProtectMode == "separate" {
+		return nil, fmt.Errorf("%w: this trade has no live bracket to change", ErrNotExitable)
+	}
+	w, ok := e.Wallets.Get(tr.WalletID)
+	if !ok {
+		return nil, fmt.Errorf("wallet %s not found", tr.WalletID)
+	}
+	addr := tr.TokenAddr
+	if addr == "" {
+		addr = e.Cfg.WETH
+	}
+	px := e.tokenPrice(addr)
+	switch {
+	case px <= 0:
+		return nil, errors.New("no live price yet")
+	case sl <= 0 || sl >= px || tp <= px:
+		return nil, fmt.Errorf("the stop must be below and the take profit above the price now ($%.2f)", px)
+	case (px-sl)/px*100 > 5:
+		return nil, errors.New("the stop may be at most 5% below the price")
+	}
+	tp, sl = round2(tp), round2(sl)
+	if err := e.Exec.MoveStop(ctx, w, tr.BracketOrderID, sl, tp); err != nil {
+		return nil, err
+	}
+	old := *tr
+	t, _ := e.Store.UpdateTrade(tr.ID, func(x *store.Trade) {
+		x.TakeProfit, x.StopLoss, x.StopMoved = tp, sl, true
+		x.Timeline = append(x.Timeline, store.Step{At: time.Now().UTC(), Step: "bracket_moved",
+			Detail: fmt.Sprintf("take profit %.2f -> %.2f, stop loss %.2f -> %.2f (Flash PATCH, signed)", old.TakeProfit, tp, old.StopLoss, sl)})
+	})
+	_ = e.Store.Save()
+	e.Feed.Publish(feed.Post{Kind: "trade_placed", AgentID: tr.AgentID, TradeID: tr.ID,
+		Text: fmt.Sprintf("%s: bracket moved to take profit %.2f / stop loss %.2f", e.label(*tr), tp, sl)})
+	return t, nil
+}
