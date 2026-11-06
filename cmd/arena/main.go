@@ -456,6 +456,7 @@ func serve(log *slog.Logger) error {
 		for _, w := range e.Wallets.List("") {
 			log.Info("wallet", "id", w.ID, "role", w.Role, "address", w.Address())
 		}
+		e.LoadUserAgents() // agents people made (they trade from their own accounts)
 		e.RestoreOpen()
 		e.PublishProfiles()
 

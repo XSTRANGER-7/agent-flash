@@ -40,7 +40,7 @@ func (e *Engine) signalText(p feed.Post, base string) string {
 	if !ok || t.WalletID != t.AgentID || t.Test || t.DryRun {
 		return ""
 	}
-	if _, isAgent := e.Agents[t.AgentID]; !isAgent {
+	if _, isAgent := e.AgentMap()[t.AgentID]; !isAgent {
 		return ""
 	}
 	if strings.HasPrefix(p.Text, "Operator is exiting") {

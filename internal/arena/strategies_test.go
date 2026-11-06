@@ -23,3 +23,33 @@ func TestStrategies(t *testing.T) {
 		t.Fatal("contrarian should fire after 4 red ticks")
 	}
 }
+
+// A person's agent: their settings are checked against the arena's limits,
+// defaults are filled in, and their TP / SL / size replace the strategy's.
+func TestBuildStrategyForPeople(t *testing.T) {
+	bad := []StrategyParams{
+		{Kind: "moon", TPPct: 2, SLPct: 1, SizePct: 20},
+		{Kind: "contrarian", Streak: 1, TPPct: 2, SLPct: 1, SizePct: 20},
+		{Kind: "trend", Fast: 20, Slow: 10, TPPct: 2, SLPct: 1, SizePct: 20},
+		{Kind: "dip", DipPct: 50, TPPct: 2, SLPct: 1, SizePct: 20},
+		{Kind: "contrarian", TPPct: 2, SLPct: 6, SizePct: 20}, // stop loss over 5%
+		{Kind: "contrarian", TPPct: 0.1, SLPct: 1, SizePct: 20},
+		{Kind: "contrarian", TPPct: 2, SLPct: 1, SizePct: 0},
+	}
+	for _, p := range bad {
+		if _, _, err := BuildStrategy(p); err == nil {
+			t.Fatalf("accepted %+v", p)
+		}
+	}
+	s, got, err := BuildStrategy(StrategyParams{Kind: "contrarian", Streak: 2, TPPct: 1.2, SLPct: 0.8, SizePct: 50})
+	if err != nil || got.Streak != 2 {
+		t.Fatalf("%v %+v", err, got)
+	}
+	sig := s.Decide([]float64{3000, 2990, 2980})
+	if sig == nil || sig.TPPct != 1.2 || sig.SLPct != 0.8 || sig.SizePct != 50 {
+		t.Fatalf("tuned signal %+v", sig)
+	}
+	if _, def, _ := BuildStrategy(StrategyParams{Kind: "trend", TPPct: 2, SLPct: 1, SizePct: 20}); def.Fast != 5 || def.Slow != 20 {
+		t.Fatalf("trend defaults %+v", def)
+	}
+}

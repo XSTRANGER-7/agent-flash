@@ -315,7 +315,7 @@ type WalletView struct {
 // are only done when withChain is set (one wallet at a time, rate limits).
 func (e *Engine) Wallet(ctx context.Context, w *wallet.Wallet, withChain bool) WalletView {
 	v := WalletView{ID: w.ID, Role: string(w.Role), Address: w.Address(), Mode: e.Cfg.ModeName(), Flags: map[string]bool{}}
-	if p, ok := e.Agents[w.ID]; ok {
+	if p, ok := e.AgentMap()[w.ID]; ok {
 		v.AgentName = p.Name
 	}
 	u, we, err := e.Balances(ctx, w, 15*time.Second)

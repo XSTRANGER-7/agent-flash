@@ -93,6 +93,98 @@ type Profile struct {
 	Strategy string   `json:"strategy"`
 	Address  string   `json:"address"`
 	Strat    Strategy `json:"-"`
+	// Community agents are made by people (not built in); Owner is the
+	// creator's own address.
+	Community bool   `json:"community,omitempty"`
+	Owner     string `json:"owner,omitempty"`
+}
+
+// Tuned runs a strategy with a person's own take profit, stop loss and size
+// (0 keeps the strategy's value).
+type Tuned struct {
+	Inner                 Strategy
+	TPPct, SLPct, SizePct float64
+}
+
+func (t Tuned) Name() string { return t.Inner.Name() }
+
+func (t Tuned) Decide(p []float64) *Signal {
+	s := t.Inner.Decide(p)
+	if s == nil {
+		return nil
+	}
+	c := *s
+	if t.TPPct > 0 {
+		c.TPPct = t.TPPct
+	}
+	if t.SLPct > 0 {
+		c.SLPct = t.SLPct
+	}
+	if t.SizePct > 0 {
+		c.SizePct = t.SizePct
+	}
+	return &c
+}
+
+// StrategyParams is what a person can tune when they make an agent. Zero
+// values take the built-in agent's defaults.
+type StrategyParams struct {
+	Kind                  string // trend | dip | contrarian
+	Fast, Slow            int    // trend: moving-average lengths (price checks)
+	Window                int    // dip: how far back the recent high is looked for
+	DipPct                float64
+	Streak                int // contrarian: falling checks in a row
+	TPPct, SLPct, SizePct float64
+}
+
+// BuildStrategy checks a person's settings against the arena's limits and
+// returns the strategy plus the settings with defaults filled in.
+func BuildStrategy(p StrategyParams) (Strategy, StrategyParams, error) {
+	in := func(v, lo, hi float64) bool { return v >= lo && v <= hi }
+	var inner Strategy
+	switch p.Kind {
+	case "trend":
+		if p.Fast == 0 {
+			p.Fast = 5
+		}
+		if p.Slow == 0 {
+			p.Slow = 20
+		}
+		if !in(float64(p.Fast), 2, 30) || !in(float64(p.Slow), 3, 120) || p.Slow <= p.Fast {
+			return nil, p, fmt.Errorf("trend: fast 2-30 checks, slow 3-120 and longer than fast")
+		}
+		inner = TrendHunter{Fast: p.Fast, Slow: p.Slow}
+	case "dip":
+		if p.Window == 0 {
+			p.Window = 20
+		}
+		if p.DipPct == 0 {
+			p.DipPct = 1.5
+		}
+		if !in(float64(p.Window), 5, 240) || !in(p.DipPct, 0.2, 20) {
+			return nil, p, fmt.Errorf("dip: look back 5-240 checks, drop 0.2%%-20%%")
+		}
+		inner = DipBuyer{Window: p.Window, DipPct: p.DipPct}
+	case "contrarian":
+		if p.Streak == 0 {
+			p.Streak = 4
+		}
+		if !in(float64(p.Streak), 2, 20) {
+			return nil, p, fmt.Errorf("contrarian: 2-20 falling checks in a row")
+		}
+		inner = Contrarian{Streak: p.Streak}
+	default:
+		return nil, p, fmt.Errorf("strategy must be trend, dip or contrarian")
+	}
+	switch {
+	case !in(p.TPPct, 0.6, 20):
+		return nil, p, fmt.Errorf("take profit must be 0.6%%-20%%")
+	case !in(p.SLPct, 0.3, 5):
+		return nil, p, fmt.Errorf("stop loss must be 0.3%%-5%% (every trade has a stop within 5%%)")
+	case !in(p.SizePct, 5, 100):
+		return nil, p, fmt.Errorf("size must be 5%%-100%% of the account per trade")
+	}
+	return Tuned{Inner: inner, TPPct: p.TPPct, SLPct: p.SLPct, SizePct: p.SizePct}, p, nil
 }
 
 // DefaultRoster maps wallet ids in wallets.json to strategies.

@@ -74,7 +74,7 @@ func (e *Engine) PlanStats(id string) (PlanStats, []store.Trade) {
 // Arena Score now (ties: most closed trades, then trend).
 func (e *Engine) bestStrategy() (string, string) {
 	best, bestScore, bestClosed := "trend", math.Inf(-1), -1
-	for id, p := range e.Agents {
+	for id, p := range e.AgentMap() {
 		_, ret, mdd := leaderboard.Stats(e.Store.PerfEquity(id))
 		score := leaderboard.Score(ret, mdd)
 		closed := 0

@@ -65,7 +65,7 @@ func (s *Server) sharePage(w http.ResponseWriter, r *http.Request) {
 		}
 		route = "#/trade/" + t.ID
 	case "agent":
-		p, ok := s.E.Agents[id]
+		p, ok := s.E.AgentMap()[id]
 		if !ok {
 			writeErr(w, 404, "agent not found")
 			return
@@ -136,7 +136,7 @@ func styleWord(s string) string {
 // agent id only for bookkeeping, so they must never read "Copy of <agent>".
 func (s *Server) name(t store.Trade) string {
 	agent := ""
-	if p, ok := s.E.Agents[t.AgentID]; ok {
+	if p, ok := s.E.AgentMap()[t.AgentID]; ok {
 		agent = p.Name
 	}
 	switch {
@@ -164,7 +164,7 @@ func (s *Server) name(t store.Trade) string {
 // rankRows is the leaderboard (shared with the share page).
 func (s *Server) rankRows() []leaderboard.Row {
 	var rows []leaderboard.Row
-	for id, p := range s.E.Agents {
+	for id, p := range s.E.AgentMap() {
 		_, ret, mdd := leaderboard.Stats(s.E.Store.PerfEquity(id))
 		rows = append(rows, leaderboard.Row{AgentID: id, Name: p.Name, ReturnPct: ret, MaxDrawdown: mdd, Score: leaderboard.Score(ret, mdd)})
 	}
@@ -197,7 +197,7 @@ func (s *Server) signalList(r *http.Request, n int) []signal {
 	base := publicBase(r)
 	out := []signal{}
 	for _, t := range s.E.Store.Trades("", 0) {
-		p, ok := s.E.Agents[t.AgentID]
+		p, ok := s.E.AgentMap()[t.AgentID]
 		if !ok || t.WalletID != t.AgentID || t.Test || t.DryRun {
 			continue
 		}
@@ -338,7 +338,7 @@ func (s *Server) orderTicket(w http.ResponseWriter, r *http.Request) {
 // agentFor labels a manual order: the agent itself, or the agent a
 // follower wallet copies / invests with.
 func agentFor(s *Server, wl *wallet.Wallet) string {
-	if _, ok := s.E.Agents[wl.ID]; ok {
+	if _, ok := s.E.AgentMap()[wl.ID]; ok {
 		return wl.ID
 	}
 	for _, f := range s.E.Store.FollowsOf(wl.ID) {

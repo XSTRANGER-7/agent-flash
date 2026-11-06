@@ -140,6 +140,72 @@ type snapshot struct {
 	Plans       map[string]*Plan          `json:"plans"`
 	Flows       map[string][]Flow         `json:"flows"`                 // deposits (+) / withdrawals (-) per wallet
 	SelfWallets map[string]string         `json:"selfWallets,omitempty"` // id -> address of people's own wallets
+	UserAgents  map[string]*UserAgent     `json:"userAgents,omitempty"`  // agents people made (id = their account)
+}
+
+// UserAgent is an agent a person made: it trades its own signals from the
+// person's arena account (id = that account's wallet id), shows on the
+// leaderboard, and others can copy or invest with it.
+type UserAgent struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Tagline   string    `json:"tagline"`
+	Owner     string    `json:"owner"` // the creator's own address (the account's payout)
+	Kind      string    `json:"kind"`  // trend | dip | contrarian
+	Fast      int       `json:"fast,omitempty"`
+	Slow      int       `json:"slow,omitempty"`
+	Window    int       `json:"window,omitempty"`
+	DipPct    float64   `json:"dipPct,omitempty"`
+	Streak    int       `json:"streak,omitempty"`
+	TPPct     float64   `json:"takeProfitPct"`
+	SLPct     float64   `json:"stopLossPct"`
+	SizePct   float64   `json:"sizePct"`
+	Paused    bool      `json:"paused,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+func (st *Store) PutUserAgent(a UserAgent) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.s.UserAgents == nil {
+		st.s.UserAgents = map[string]*UserAgent{}
+	}
+	cp := a
+	st.s.UserAgents[a.ID] = &cp
+}
+
+func (st *Store) UserAgent(id string) (UserAgent, bool) {
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+	a, ok := st.s.UserAgents[id]
+	if !ok {
+		return UserAgent{}, false
+	}
+	return *a, true
+}
+
+// UserAgents lists every agent people made, oldest first.
+func (st *Store) UserAgents() []UserAgent {
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+	out := make([]UserAgent, 0, len(st.s.UserAgents))
+	for _, a := range st.s.UserAgents {
+		out = append(out, *a)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out
+}
+
+func (st *Store) UpdateUserAgent(id string, fn func(*UserAgent)) (UserAgent, bool) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	a, ok := st.s.UserAgents[id]
+	if !ok {
+		return UserAgent{}, false
+	}
+	fn(a)
+	a.ID = id
+	return *a, true
 }
 
 type Store struct {

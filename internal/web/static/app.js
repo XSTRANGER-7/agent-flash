@@ -764,7 +764,7 @@ async function pageHome(page) {
       boardEl.innerHTML = `<div class="standings-head"><span class="eyebrow">Top agents</span><a class="link-quiet small" href="#/leaderboard">All</a></div>
         <div data-stagger>${rows.map((r, i) => `<a class="srow" href="#/agent/${encodeURIComponent(r.agentId)}">
           <span class="rank num">${esc(r.rank)}</span>
-          <span class="who"><strong>${esc(r.name)}</strong><span class="sub num">${esc(pct(r.returnPct))} · ${esc(plural(r.trades, "trade"))}</span></span>
+          <span class="who"><strong>${esc(r.name)}</strong><span class="sub num">${esc(pct(r.returnPct))} · ${esc(plural(r.trades, "trade"))}${r.community ? ` · by ${esc(short(r.owner))}` : ""}</span></span>
           <span class="moveslot">${moveHTML(r.agentId, r.rank)}</span>
           <span class="score"><b class="num ${signClass(r.score)}">${esc(FMT.score(+r.score || 0))}</b></span>
           ${sparkline(details[i]?.equity)}
@@ -827,7 +827,7 @@ async function pageLeaderboard(page) {
       </tr></thead><tbody data-stagger>${lb.rows.map((r, i) => `<tr data-href="#/agent/${encodeURIComponent(r.agentId)}" tabindex="0">
         <td class="c-rank num">${esc(r.rank)}</td>
         <td class="c-move">${moveHTML(r.agentId, r.rank)}</td>
-        <td><a class="agent-link" href="#/agent/${encodeURIComponent(r.agentId)}">${esc(r.name)}</a>${state.watch.has(r.agentId) ? ' <span class="chip chip-watch">Watching</span>' : ""}<div class="muted small num">${esc(usd(r.equityUsd))} equity · ${esc(details[i]?.agent?.strategy || "")}</div></td>
+        <td><a class="agent-link" href="#/agent/${encodeURIComponent(r.agentId)}">${esc(r.name)}</a>${r.community ? ` <span class="chip">by ${esc(short(r.owner))}</span>` : ""}${state.watch.has(r.agentId) ? ' <span class="chip chip-watch">Watching</span>' : ""}<div class="muted small num">${esc(usd(r.equityUsd))} equity · ${esc(details[i]?.agent?.strategy || r.strategy || "")}</div></td>
         <td class="r num strong ${signClass(r.score)}">${esc(FMT.score(+r.score || 0))}</td>
         <td class="hide-sm c-bar"><span class="sbar${+r.score < 0 ? " neg" : ""}" data-k="${Math.min(1, Math.abs(+r.score || 0) / maxAbs).toFixed(3)}"><i></i></span></td>
         <td class="r num ${signClass(r.returnPct)}">${esc(pct(r.returnPct))}</td>
@@ -931,7 +931,8 @@ async function pageAgent(page, id) {
   body.innerHTML = `
     <header class="agent-head">
       <div class="avatar" aria-hidden="true" data-reveal>${esc(initials(a.name))}</div>
-      <div data-reveal><p class="eyebrow">Rank ${esc(row.rank ?? "—")} · ${esc(a.strategy)} strategy</p><h1>${esc(a.name)}</h1><p class="lede lede-sm">${esc(a.tagline)}</p>
+      <div data-reveal><p class="eyebrow">Rank ${esc(row.rank ?? "—")} · ${a.community ? "Community agent" : esc(a.strategy) + " strategy"}</p><h1>${esc(a.name)}</h1><p class="lede lede-sm">${esc(a.tagline)}</p>
+        ${a.community ? agentRules(a) : ""}
         <div class="addr">Wallet ${addrLink(a.address)}<button type="button" class="btn-link" data-copy="${esc(a.address)}">Copy address</button></div></div>
       <div class="btn-row" data-reveal><button class="btn ${watching ? "btn-ghost" : "btn-primary"}" data-watch>${watching ? "Stop watching" : "Watch this agent"}</button><button class="btn btn-ghost" data-ashare>Share</button>${openSig ? '<button class="btn btn-ghost" data-acopy>Copy with my wallet</button>' : ""}</div>
     </header>
@@ -952,7 +953,7 @@ async function pageAgent(page, id) {
       </div>
       <aside data-copy-panel></aside>
     </div>
-    <section class="section"><div class="panel action-row" data-reveal><div><p class="eyebrow">Your own sub-wallet</p><h3 class="panel-title">Invest with ${esc(a.name)}</h3></div><div class="btn-row">${infoBtn("invest")}<button type="button" class="btn btn-primary" data-invest-open>Invest</button></div></div></section>`;
+    <section class="section"><div class="panel action-row" data-reveal><div><p class="eyebrow">USDC only · no gas</p><h3 class="panel-title">Invest with ${esc(a.name)}</h3></div><div class="btn-row">${infoBtn("invest")}<button type="button" class="btn btn-primary" data-invest-me>From my account</button>${isOperator() ? '<button type="button" class="btn btn-ghost" data-invest-open>New sub-wallet</button>' : ""}</div></div></section>`;
 
   wireChart(body, data.equity);
   $("[data-copy]", body).addEventListener("click", async (e) => {
@@ -973,7 +974,31 @@ async function pageAgent(page, id) {
   }));
   $("[data-acopy]", body)?.addEventListener("click", () => walletTrade({ copyOf: openSig.id, token: tokenOf(openSig), from: a.name }));
   renderCopyPanel($("[data-copy-panel]", body), a);
-  $("[data-invest-open]", body).addEventListener("click", () => renderInvestPanel(openSheet(`Invest with ${a.name}`, { wide: true }), a));
+  $("[data-invest-open]", body)?.addEventListener("click", () => renderInvestPanel(openSheet(`Invest with ${a.name}`, { wide: true }), a));
+  $("[data-invest-me]", body).addEventListener("click", (e) => investFromAccount(e.currentTarget, a));
+}
+
+// The rules of an agent a person made, so anyone can judge it before copying.
+function agentRules(a) {
+  const r = a.rules || {};
+  const when = { trend: `${r.fast}-check average crosses above the ${r.slow}-check one`, dip: `price is ${fixed(r.dipPct, 1)}% below its ${r.window}-check high`,
+    contrarian: `price falls ${r.streak} checks in a row` }[r.kind] || "";
+  return `<p class="chips"><span class="mini">${esc(AGENT_KIND[r.kind]?.label || r.kind || a.strategy)}</span><span class="mini">TP +${esc(fixed(r.takeProfitPct, 1))}%</span><span class="mini">SL −${esc(fixed(r.stopLossPct, 1))}%</span><span class="mini">${esc(fixed(r.sizePct, 0))}% a trade</span>${a.paused ? '<span class="mini mini-test">Paused</span>' : ""}</p>
+    <p class="muted small">Made by ${addrLink(a.owner)}${when ? ` · buys when ${esc(when)}` : ""}</p>`;
+}
+
+// Invest with this agent from the signed-in Arena account (no admin token).
+async function investFromAccount(btn, a) {
+  if (!wallet.address || !meToken()) { location.hash = "#/me"; toast(`Connect your wallet and sign in, then pick ${a.name}.`, "ok"); return; }
+  const done = busy(btn, "Loading…");
+  let d;
+  try { d = await api("/v1/me", { me: true }); } catch (err) { toast(err.message, "err"); done(); return; }
+  done();
+  if (!d.account) { location.hash = "#/me"; toast("Create your Arena account first (one tap), then add USDC.", "ok"); return; }
+  if (d.agent) { toast(d.agent.id === a.id ? "This is your own agent. It already trades your account." : "Your account runs your own agent, so it can't also invest with another one.", "err"); return; }
+  if (d.plan) { toast("Your account runs a plan. Stop it first to invest with an agent.", "err"); return; }
+  if (!state.board) await loadBoard().catch(() => null);
+  investSheet(d, () => toast(`Open My wallet to see trades from ${a.name}.`, "ok"), a.id);
 }
 
 async function copyText(text) {
@@ -2874,9 +2899,11 @@ function accountHTML(d) {
       <li><div><b>Add USDC</b><span>Sign once in your wallet, free</span></div></li><li><div><b>Pick an agent</b><span>It trades for you, stop loss on every order</span></div></li></ol>
       <button type="button" class="btn btn-primary btn-block" data-acct-create>Create my account</button><p class="footnote">${esc(gasLine)}</p></div>`;
   }
-  const f = (a.follows || [])[0], paused = a.profile?.paused;
+  const f = (a.follows || [])[0], paused = a.profile?.paused, ag = d.agent, plan = d.plan;
   const agent = f ? (state.board?.rows || []).find((r) => r.agentId === f.agentId)?.name || f.agentId : "";
-  const link = f ? `${f.mode === "copy" ? "Copying" : "Investing with"} <b>${esc(agent)}</b> · ${f.allocationPct ? esc(f.allocationPct) + "%" : "agent's size"} a trade, max ${esc(usd(f.maxPerTradeUsd))}` : "Not linked to an agent yet";
+  const link = ag ? `Your agent <a class="link" href="#/agent/${enc(ag.id)}">${esc(ag.name)}</a> · ${esc(AGENT_KIND[ag.kind]?.label || ag.kind)} · take profit ${esc(fixed(ag.takeProfitPct, 1))}% · stop loss ${esc(fixed(ag.stopLossPct, 1))}% · ${esc(fixed(ag.sizePct, 0))}% a trade${ag.paused ? " · <b>paused</b>" : ""}`
+    : plan ? `Running your plan <a class="link" href="#/plan/${enc(plan.id)}">${esc(plan.name)}</a> (${esc(plan.status)})`
+    : f ? `${f.mode === "copy" ? "Copying" : "Investing with"} <b>${esc(agent)}</b> · ${f.allocationPct ? esc(f.allocationPct) + "%" : "agent's size"} a trade, max ${esc(usd(f.maxPerTradeUsd))}` : "Not linked to an agent yet";
   return `<div class="action-row"><div><p class="eyebrow">Arena account ${paused ? '<span class="mini mini-test">Paused</span>' : ""}</p>
       <p class="addr">${addrLink(a.address)}<span class="muted small">Payout locked to ${esc(short(d.address))}</span></p></div></div>
     <dl class="statline">
@@ -2887,7 +2914,9 @@ function accountHTML(d) {
     </dl>
     <p class="acct-link">${link}</p>
     <div class="btn-row"><button type="button" class="btn btn-primary" data-acct-add>Add funds</button>
-      <button type="button" class="btn btn-ghost" data-acct-invest>${f ? "Change agent" : "Pick an agent"}</button>
+      ${ag ? `<a class="btn btn-ghost" href="#/agent/${enc(ag.id)}">View my agent</a><button type="button" class="btn btn-ghost" data-acct-agent-pause>${ag.paused ? "Resume agent" : "Pause agent"}</button>`
+        : plan ? `<a class="btn btn-ghost" href="#/plan/${enc(plan.id)}">View my plan</a>`
+        : `<button type="button" class="btn btn-ghost" data-acct-invest>${f ? "Change agent" : "Pick an agent"}</button>${f ? "" : '<button type="button" class="btn btn-ghost" data-acct-make-agent>Make my own agent</button>'}`}
       <button type="button" class="btn btn-ghost" data-acct-withdraw ${a.usdc > 0 ? "" : "disabled"}>Withdraw</button>
       ${f ? `<button type="button" class="btn btn-ghost" data-acct-pause>${paused ? "Resume" : "Pause"}</button>` : ""}</div>
     <p class="footnote">${esc(gasLine)}</p>
@@ -2932,6 +2961,76 @@ async function renderAccount(box, onChange) {
   $("[data-acct-pause]", box)?.addEventListener("click", (e) => act(e.currentTarget, "Saving…", async () => {
     await api(d.account?.profile?.paused ? "/v1/me/resume" : "/v1/me/pause", { method: "POST", me: true, body: {} });
   }));
+  $("[data-acct-make-agent]", box)?.addEventListener("click", () => agentSheet(() => renderAccount(box, onChange)));
+  $("[data-acct-agent-pause]", box)?.addEventListener("click", (e) => act(e.currentTarget, "Saving…", async () => {
+    await api(d.agent?.paused ? "/v1/me/agent/resume" : "/v1/me/agent/pause", { method: "POST", me: true, body: {} });
+    toast(d.agent?.paused ? "Your agent is trading again" : "Your agent is paused. Open trades keep their stop loss.", "ok");
+  }));
+}
+
+// The strategies a person can give their agent (same code as the built-in agents).
+const AGENT_KIND = {
+  trend: { label: "Trend", line: "Buys when the short average crosses above the long one" },
+  dip: { label: "Dip buyer", line: "Buys when price falls a set % below its recent high" },
+  contrarian: { label: "Contrarian", line: "Buys after price falls several checks in a row" },
+};
+
+function agentSheet(after) {
+  const sb = openSheet("Make your agent", { wide: true });
+  sb.innerHTML = `<form class="sheet-body" data-agent-form novalidate>
+      <p class="sheet-text">It trades its own signals from your account. It shows on the leaderboard, and anyone can watch, copy or invest with it.</p>
+      <div class="form-grid form-2">
+        <div class="field"><label for="ag-name">Name</label><input id="ag-name" name="name" maxlength="24" autocomplete="off" placeholder="Steady Eddie" required><span class="hint">3-24 letters or numbers, must be unique</span></div>
+        <div class="field"><label for="ag-tag">One line about it</label><input id="ag-tag" name="tagline" maxlength="80" autocomplete="off" placeholder="Buys panic, sells the bounce"></div>
+      </div>
+      <div class="field field-gap"><span class="label">Strategy</span>
+        <div class="choice-grid choice-wide">${Object.entries(AGENT_KIND).map(([k, s], i) => `<label class="choice"><input type="radio" name="strategy" value="${k}" ${i === 2 ? "checked" : ""}><span class="choice-body"><b>${esc(s.label)}</b><span class="muted small">${esc(s.line)}</span></span></label>`).join("")}</div></div>
+      <div class="form-grid form-3 field-gap">
+        <div class="field" data-ak="trend" hidden><label for="ag-fast">Short average (checks)</label><input id="ag-fast" name="fast" type="number" min="2" max="30" step="1" value="5" inputmode="numeric"><span class="hint">One check every 15 seconds</span></div>
+        <div class="field" data-ak="trend" hidden><label for="ag-slow">Long average (checks)</label><input id="ag-slow" name="slow" type="number" min="3" max="120" step="1" value="20" inputmode="numeric"></div>
+        <div class="field" data-ak="dip" hidden><label for="ag-dip">Drop (%)</label><input id="ag-dip" name="dipPct" type="number" min="0.2" max="20" step="0.1" value="1.5" inputmode="decimal"><span class="hint">Below the recent high</span></div>
+        <div class="field" data-ak="dip" hidden><label for="ag-win">Recent high over (checks)</label><input id="ag-win" name="window" type="number" min="5" max="240" step="1" value="20" inputmode="numeric"></div>
+        <div class="field" data-ak="contrarian"><label for="ag-streak">Falling checks in a row</label><input id="ag-streak" name="streak" type="number" min="2" max="20" step="1" value="4" inputmode="numeric"><span class="hint">Fewer = trades more often</span></div>
+      </div>
+      <div class="form-grid form-3 field-gap">
+        <div class="field"><label for="ag-tp">Take profit (%)</label><input id="ag-tp" name="takeProfitPct" type="number" min="0.6" max="20" step="0.1" value="1.5" inputmode="decimal"></div>
+        <div class="field"><label for="ag-sl">Stop loss (%)</label><input id="ag-sl" name="stopLossPct" type="number" min="0.3" max="5" step="0.1" value="1" inputmode="decimal"><span class="hint">Every trade has one, up to 5%</span></div>
+        <div class="field"><label for="ag-size">Per trade (% of your USDC)</label><input id="ag-size" name="sizePct" type="number" min="5" max="100" step="1" value="25" inputmode="numeric"></div>
+      </div>
+      <p class="ticket-preview" data-ag-preview></p>
+      <div class="btn-row sheet-cta"><button class="btn btn-primary btn-block" type="submit">Launch my agent</button></div></form>`;
+  const form = $("[data-agent-form]", sb);
+  const read = () => {
+    const v = new FormData(form), n = (k) => num(v.get(k));
+    return { name: String(v.get("name") || "").trim(), tagline: String(v.get("tagline") || "").trim(), strategy: v.get("strategy"),
+      fast: Math.round(n("fast")), slow: Math.round(n("slow")), dipPct: n("dipPct"), window: Math.round(n("window")), streak: Math.round(n("streak")),
+      takeProfitPct: n("takeProfitPct"), stopLossPct: n("stopLossPct"), sizePct: n("sizePct") };
+  };
+  const draw = () => {
+    const v = read();
+    $$("[data-ak]", form).forEach((el) => { el.hidden = el.dataset.ak !== v.strategy; });
+    const when = { trend: `the ${v.fast}-check average crosses above the ${v.slow}-check one`, dip: `price is ${fixed(v.dipPct, 1)}% below its high of the last ${v.window} checks`,
+      contrarian: `price falls ${v.streak} checks in a row` }[v.strategy] || "";
+    $("[data-ag-preview]", form).textContent = `Buys ${fixed(v.sizePct, 0)}% of your USDC when ${when}. Sells at +${fixed(v.takeProfitPct, 1)}% or −${fixed(v.stopLossPct, 1)}%.`;
+  };
+  form.addEventListener("input", draw); form.addEventListener("change", draw); draw();
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const v = read();
+    if (v.name.length < 3) { toast("Give your agent a name (3-24 characters).", "err"); $("#ag-name", form).focus(); return; }
+    const body = { name: v.name, tagline: v.tagline, strategy: v.strategy, takeProfitPct: v.takeProfitPct, stopLossPct: v.stopLossPct, sizePct: v.sizePct };
+    if (v.strategy === "trend") Object.assign(body, { fast: v.fast, slow: v.slow });
+    if (v.strategy === "dip") Object.assign(body, { dipPct: v.dipPct, window: v.window });
+    if (v.strategy === "contrarian") body.streak = v.streak;
+    const done = busy($("button[type=submit]", form), "Launching…");
+    try {
+      const r = await api("/v1/me/agent", { method: "POST", me: true, body });
+      sheetClose(sheet);
+      state.board = null; // the leaderboard now has one more agent
+      toast(`${r.agent?.name || "Your agent"} is live on the leaderboard`, "ok");
+      after?.();
+    } catch (err) { toast(err.message, "err"); } finally { done(); }
+  });
 }
 
 function depositSheet(d, after) {
@@ -2960,9 +3059,9 @@ function depositSheet(d, after) {
   });
 }
 
-function investSheet(d, after) {
-  const rows = state.board?.rows || [];
-  const f = (d.account?.follows || [])[0];
+function investSheet(d, after, pick) {
+  const rows = (state.board?.rows || []).filter((r) => r.agentId !== d.account?.id);
+  const f = pick ? { ...((d.account?.follows || [])[0] || {}), agentId: pick } : (d.account?.follows || [])[0];
   const maxPos = +d.maxPositionPct || 25, maxTrade = +d.maxTradeUsd || 5;
   const sb = openSheet("Pick an agent", { wide: true });
   sb.innerHTML = `<form class="sheet-body" data-inv novalidate>

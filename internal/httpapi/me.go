@@ -26,10 +26,12 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/vikram/agent-arena/internal/arena"
 	"github.com/vikram/agent-arena/internal/engine"
 	"github.com/vikram/agent-arena/internal/evm"
 	"github.com/vikram/agent-arena/internal/feed"
@@ -225,8 +227,123 @@ func (s *Server) meView(ctx context.Context, addr string) map[string]any {
 	if wl, ok, err := s.myWallet(addr); err == nil && ok {
 		v := s.E.Wallet(ctx, wl, false)
 		out["account"] = v
+		if ua, isAgent := s.E.Store.UserAgent(wl.ID); isAgent {
+			out["agent"] = ua // the account is an agent people can follow
+		}
+		if p, busy := s.activePlan(wl.ID); busy {
+			out["plan"] = map[string]any{"id": p.ID, "name": p.Name, "status": p.Status}
+		}
 	}
 	return out
+}
+
+var agentNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 _.'-]{1,22}[A-Za-z0-9]$`)
+
+// meAgent makes the caller's account an agent: it trades its own signals
+// from that account, shows on the leaderboard, and anyone can watch, copy or
+// invest with it. Every arena rule still applies (stop loss within 5%, size
+// and cost guards, live budget, circuit breaker).
+func (s *Server) meAgent(w http.ResponseWriter, r *http.Request, addr string) {
+	wl, ok, err := s.myWallet(addr)
+	if err != nil || !ok {
+		writeErr(w, 409, "create your account first")
+		return
+	}
+	if _, exists := s.E.Store.UserAgent(wl.ID); exists {
+		writeErr(w, 409, "your account is already an agent")
+		return
+	}
+	if len(s.E.Store.FollowsOf(wl.ID)) > 0 {
+		writeErr(w, 409, "your account follows an agent; stop that first (one job per account)")
+		return
+	}
+	if p, busy := s.activePlan(wl.ID); busy {
+		writeErr(w, 409, "your account runs the plan \""+p.Name+"\"; stop it first (one job per account)")
+		return
+	}
+	var in struct {
+		Name          string  `json:"name"`
+		Tagline       string  `json:"tagline"`
+		Strategy      string  `json:"strategy"`
+		Fast          int     `json:"fast"`
+		Slow          int     `json:"slow"`
+		Window        int     `json:"window"`
+		DipPct        float64 `json:"dipPct"`
+		Streak        int     `json:"streak"`
+		TakeProfitPct float64 `json:"takeProfitPct"`
+		StopLossPct   float64 `json:"stopLossPct"`
+		SizePct       float64 `json:"sizePct"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	name, tagline := strings.TrimSpace(in.Name), strings.TrimSpace(in.Tagline)
+	switch {
+	case !agentNameRe.MatchString(name):
+		writeErr(w, 400, "name: 3-24 letters, numbers, spaces, - _ . '")
+		return
+	case len(tagline) > 80:
+		writeErr(w, 400, "tagline: up to 80 characters")
+		return
+	}
+	for _, p := range s.E.AgentMap() {
+		if strings.EqualFold(p.Name, name) {
+			writeErr(w, 409, "that name is taken")
+			return
+		}
+	}
+	_, params, err := arena.BuildStrategy(arena.StrategyParams{Kind: in.Strategy, Fast: in.Fast, Slow: in.Slow, Window: in.Window,
+		DipPct: in.DipPct, Streak: in.Streak, TPPct: in.TakeProfitPct, SLPct: in.StopLossPct, SizePct: in.SizePct})
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	if !allow("agent", r, 3, time.Hour) {
+		writeErr(w, 429, "too many new agents from here; try later")
+		return
+	}
+	ua := store.UserAgent{ID: wl.ID, Name: name, Tagline: tagline, Owner: addr, Kind: params.Kind, Fast: params.Fast, Slow: params.Slow,
+		Window: params.Window, DipPct: params.DipPct, Streak: params.Streak, TPPct: params.TPPct, SLPct: params.SLPct, SizePct: params.SizePct,
+		CreatedAt: time.Now().UTC()}
+	prof, err := engine.UserAgentProfile(ua)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	s.E.Store.PutUserAgent(ua)
+	_ = s.E.Store.Save()
+	s.E.AddAgent(prof)
+	s.E.Feed.Publish(feed.Post{Kind: "follow", AgentID: wl.ID, Text: fmt.Sprintf("New agent \"%s\" by %s: %s strategy, take profit %.1f%%, stop loss %.1f%%. Watch, copy or invest with it.",
+		name, addr[:6]+"…"+addr[len(addr)-4:], params.Kind, params.TPPct, params.SLPct)})
+	s.Log.Info("user agent created", "id", wl.ID, "name", name, "kind", params.Kind, "owner", addr)
+	writeJSON(w, 201, s.meView(r.Context(), addr))
+}
+
+// meAgentAction pauses or resumes the caller's agent (open trades keep their TP / SL).
+func (s *Server) meAgentAction(w http.ResponseWriter, r *http.Request, addr string) {
+	wl, ok, err := s.myWallet(addr)
+	if err != nil || !ok {
+		writeErr(w, 409, "create your account first")
+		return
+	}
+	pause := r.PathValue("action") == "pause"
+	if !pause && r.PathValue("action") != "resume" {
+		writeErr(w, 404, "unknown action")
+		return
+	}
+	ua, ok := s.E.Store.UpdateUserAgent(wl.ID, func(a *store.UserAgent) { a.Paused = pause })
+	if !ok {
+		writeErr(w, 404, "your account is not an agent")
+		return
+	}
+	_ = s.E.Store.Save()
+	verb := "resumed"
+	if pause {
+		verb = "paused"
+	}
+	s.E.Feed.Publish(feed.Post{Kind: "follow", AgentID: wl.ID, Text: fmt.Sprintf("Agent \"%s\" was %s by its maker", ua.Name, verb)})
+	writeJSON(w, 200, s.meView(r.Context(), addr))
 }
 
 func (s *Server) meGet(w http.ResponseWriter, r *http.Request, addr string) {
@@ -360,9 +477,13 @@ func (s *Server) meInvest(w http.ResponseWriter, r *http.Request, addr string) {
 		writeErr(w, 400, err.Error())
 		return
 	}
-	ag, ok := s.E.Agents[in.AgentID]
+	ag, ok := s.E.AgentMap()[in.AgentID]
 	if !ok {
 		writeErr(w, 400, "unknown agent")
+		return
+	}
+	if _, isAgent := s.E.Store.UserAgent(wl.ID); isAgent {
+		writeErr(w, 409, "your account is an agent: it trades its own signals (one job per account)")
 		return
 	}
 	if p, busy := s.activePlan(wl.ID); busy {
@@ -417,6 +538,10 @@ func (s *Server) mePlan(w http.ResponseWriter, r *http.Request, addr string) {
 	}
 	if len(s.E.Store.FollowsOf(wl.ID)) > 0 {
 		writeErr(w, 409, "your account is linked to an agent; stop that first (one job per account)")
+		return
+	}
+	if _, isAgent := s.E.Store.UserAgent(wl.ID); isAgent {
+		writeErr(w, 409, "your account is an agent: it trades its own signals (one job per account)")
 		return
 	}
 	var in map[string]any

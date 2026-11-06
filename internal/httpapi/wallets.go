@@ -72,7 +72,7 @@ func (s *Server) walletCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "mode must be invest or copy")
 		return
 	}
-	if _, ok := s.E.Agents[in.AgentID]; !ok {
+	if _, ok := s.E.AgentMap()[in.AgentID]; !ok {
 		writeErr(w, 400, "unknown agent")
 		return
 	}
@@ -105,7 +105,7 @@ func (s *Server) walletCreate(w http.ResponseWriter, r *http.Request) {
 	if in.Mode == "copy" {
 		verb = "is copying"
 	}
-	s.E.Feed.Publish(feed.Post{Kind: "follow", AgentID: in.AgentID, Text: fmt.Sprintf("%s %s %s from a new sub-wallet (max $%.2f per trade, $%.2f a day)", in.Owner, verb, s.E.Agents[in.AgentID].Name, f.MaxPerTradeUSD, f.DailyCapUSD)})
+	s.E.Feed.Publish(feed.Post{Kind: "follow", AgentID: in.AgentID, Text: fmt.Sprintf("%s %s %s from a new sub-wallet (max $%.2f per trade, $%.2f a day)", in.Owner, verb, s.E.AgentMap()[in.AgentID].Name, f.MaxPerTradeUSD, f.DailyCapUSD)})
 	s.Log.Info("sub-wallet created", "id", nw.ID, "address", nw.Address(), "agent", in.AgentID, "mode", in.Mode)
 	writeJSON(w, 201, map[string]any{"wallet": s.E.Wallet(r.Context(), nw, false),
 		"fund": fundHint(s, nw.Address())})
@@ -188,7 +188,7 @@ func (s *Server) walletLimits(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, "only follower wallets copy or invest")
 			return
 		}
-		if _, ok := s.E.Agents[in.AgentID]; !ok {
+		if _, ok := s.E.AgentMap()[in.AgentID]; !ok {
 			writeErr(w, 400, "unknown agent")
 			return
 		}
@@ -351,13 +351,13 @@ func (s *Server) testTrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	agentID := wl.ID
-	if _, isAgent := s.E.Agents[wl.ID]; !isAgent {
+	if _, isAgent := s.E.AgentMap()[wl.ID]; !isAgent {
 		agentID = ""
 		for _, f := range s.E.Store.FollowsOf(wl.ID) {
 			agentID = f.AgentID
 		}
 		if agentID == "" {
-			for id := range s.E.Agents {
+			for id := range s.E.AgentMap() {
 				agentID = id
 				break
 			}

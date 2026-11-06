@@ -25,6 +25,9 @@ type Row struct {
 	Wins        int     `json:"wins"`
 	WinRatePct  float64 `json:"winRatePct"`
 	Followers   int     `json:"followers"`
+	Strategy    string  `json:"strategy,omitempty"`
+	Community   bool    `json:"community,omitempty"` // made by a person, not built in
+	Owner       string  `json:"owner,omitempty"`     // the maker's address
 }
 
 // Stats derives return and max drawdown from an equity series.

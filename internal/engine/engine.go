@@ -15,6 +15,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/vikram/agent-arena/internal/approval"
@@ -45,7 +46,9 @@ type Engine struct {
 	Outbox  *outbox.Outbox
 	Wallets *wallet.Registry
 	Prices  *arena.PriceFeed
-	Agents  map[string]arena.Profile
+	// Agents is the built-in roster given at start. Read agents through
+	// AgentMap(): people can add agents while the server runs.
+	Agents map[string]arena.Profile
 	// Stream is the Flash orders WebSocket (nil = REST polling only).
 	Stream *flash.Stream
 	// TokenFeeds prices coins other than WETH (lower-case address -> feed).
@@ -66,6 +69,59 @@ type Engine struct {
 	mu          sync.Mutex
 	stopTries   map[string]int
 	lastBlock   map[string]time.Time // wallet|code -> last feed post (see blockQuiet)
+
+	// Agents added at runtime. The map is copy-on-write: a published map is
+	// never changed, so readers never race a writer.
+	agentsMu  sync.Mutex
+	agentsCOW atomic.Pointer[map[string]arena.Profile]
+	agentsCtx context.Context // set once RunAgents runs; new agents start under it
+}
+
+// AgentMap is every agent: the built-in roster plus agents people made.
+// Do not modify the returned map.
+func (e *Engine) AgentMap() map[string]arena.Profile {
+	if p := e.agentsCOW.Load(); p != nil {
+		return *p
+	}
+	return e.Agents
+}
+
+// AddAgent registers an agent and, once agents run, starts its loop.
+func (e *Engine) AddAgent(p arena.Profile) {
+	e.agentsMu.Lock()
+	defer e.agentsMu.Unlock()
+	cur := e.AgentMap()
+	next := make(map[string]arena.Profile, len(cur)+1)
+	for k, v := range cur {
+		next[k] = v
+	}
+	_, existed := next[p.ID]
+	next[p.ID] = p
+	e.agentsCOW.Store(&next)
+	if e.agentsCtx != nil && !existed {
+		go e.runAgent(e.agentsCtx, p.ID)
+	}
+}
+
+// LoadUserAgents registers the agents people made (from the store).
+func (e *Engine) LoadUserAgents() {
+	for _, ua := range e.Store.UserAgents() {
+		if p, err := UserAgentProfile(ua); err == nil {
+			e.AddAgent(p)
+		} else {
+			e.Log.Warn("user agent skipped", "id", ua.ID, "err", err)
+		}
+	}
+}
+
+// UserAgentProfile builds the runtime profile of an agent a person made.
+func UserAgentProfile(ua store.UserAgent) (arena.Profile, error) {
+	strat, _, err := arena.BuildStrategy(arena.StrategyParams{Kind: ua.Kind, Fast: ua.Fast, Slow: ua.Slow, Window: ua.Window, DipPct: ua.DipPct,
+		Streak: ua.Streak, TPPct: ua.TPPct, SLPct: ua.SLPct, SizePct: ua.SizePct})
+	if err != nil {
+		return arena.Profile{}, err
+	}
+	return arena.Profile{ID: ua.ID, Name: ua.Name, Tagline: ua.Tagline, Strategy: ua.Kind, Strat: strat, Community: true, Owner: ua.Owner}, nil
 }
 
 // blockQuiet is how long the same referee block (same wallet, same code) stays
@@ -428,7 +484,7 @@ func (e *Engine) copyOne(ctx context.Context, in referee.Intent, src *store.Trad
 }
 
 func (e *Engine) name(agentID string) string {
-	if p, ok := e.Agents[agentID]; ok {
+	if p, ok := e.AgentMap()[agentID]; ok {
 		return p.Name
 	}
 	return agentID
@@ -451,55 +507,70 @@ func boolInt(b bool) int {
 
 // RunAgents runs every agent concurrently on its own ticker.
 func (e *Engine) RunAgents(ctx context.Context) {
-	var wg sync.WaitGroup
-	for id, prof := range e.Agents {
-		if _, ok := e.Wallets.Get(id); !ok {
-			e.Log.Warn("agent has no wallet; skipping", "agent", id)
+	e.agentsMu.Lock()
+	e.agentsCtx = ctx
+	ids := make([]string, 0, len(e.AgentMap()))
+	for id := range e.AgentMap() {
+		ids = append(ids, id)
+	}
+	e.agentsMu.Unlock()
+	for _, id := range ids {
+		go e.runAgent(ctx, id)
+	}
+	<-ctx.Done()
+}
+
+// runAgent is one agent's loop: check the strategy every AGENT_EVERY and
+// trade its signals (its own wallet, then the people who invest with it).
+func (e *Engine) runAgent(ctx context.Context, id string) {
+	if _, ok := e.Wallets.Get(id); !ok {
+		e.Log.Warn("agent has no wallet; skipping", "agent", id)
+		return
+	}
+	t := time.NewTicker(e.Cfg.AgentEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		prof, ok := e.AgentMap()[id]
+		if !ok {
+			return
+		}
+		if ua, isUser := e.Store.UserAgent(id); isUser && ua.Paused {
+			continue // its maker paused it
+		}
+		prices, fresh := e.Prices.Snapshot(3 * e.Cfg.PriceEvery)
+		if !fresh || len(prices) == 0 {
 			continue
 		}
-		wg.Add(1)
-		go func(id string, prof arena.Profile) {
-			defer wg.Done()
-			t := time.NewTicker(e.Cfg.AgentEvery)
-			defer t.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-t.C:
-				}
-				prices, fresh := e.Prices.Snapshot(3 * e.Cfg.PriceEvery)
-				if !fresh || len(prices) == 0 {
-					continue
-				}
-				sig := prof.Strat.Decide(prices)
-				if sig == nil {
-					continue
-				}
-				px := prices[len(prices)-1]
-				in := referee.Intent{
-					AgentID: id, WalletID: id, OrderType: "market+bracket", Token: e.Cfg.TradeAsset,
-					SizePct: sig.SizePct, Price: px, TakeProfit: round2(px * (1 + sig.TPPct/100)), StopLoss: round2(px * (1 - sig.SLPct/100)),
-					Reason: sig.Reason,
-				}
-				if e.Cfg.Live() && !e.Cfg.LiveAgents {
-					// Real money only moves when a person asks (test trade) until
-					// LIVE_AGENTS=true. The signal is still shown, once an hour.
-					if e.shouldPostBlock(id, "LIVE_AGENTS_OFF", time.Now()) {
-						// Information, not an error: the operator chose to keep real-money auto-trading off.
-						e.Feed.Publish(feed.Post{Kind: "signal_paused", AgentID: id, Text: fmt.Sprintf("%s signal: %s No real order: auto-trading with real money is switched off (LIVE_AGENTS=false).", prof.Name, sig.Reason), Data: map[string]any{"code": "LIVE_AGENTS_OFF"}})
-					}
-					continue
-				}
-				res := e.Propose(ctx, in)
-				if res.Error != "" {
-					e.Log.Warn("agent proposal error", "agent", id, "err", res.Error)
-				}
-				e.investAll(ctx, in)
+		sig := prof.Strat.Decide(prices)
+		if sig == nil {
+			continue
+		}
+		px := prices[len(prices)-1]
+		in := referee.Intent{
+			AgentID: id, WalletID: id, OrderType: "market+bracket", Token: e.Cfg.TradeAsset,
+			SizePct: sig.SizePct, Price: px, TakeProfit: round2(px * (1 + sig.TPPct/100)), StopLoss: round2(px * (1 - sig.SLPct/100)),
+			Reason: sig.Reason,
+		}
+		if e.Cfg.Live() && !e.Cfg.LiveAgents {
+			// Real money only moves when a person asks (test trade) until
+			// LIVE_AGENTS=true. The signal is still shown, once an hour.
+			if e.shouldPostBlock(id, "LIVE_AGENTS_OFF", time.Now()) {
+				// Information, not an error: the operator chose to keep real-money auto-trading off.
+				e.Feed.Publish(feed.Post{Kind: "signal_paused", AgentID: id, Text: fmt.Sprintf("%s signal: %s No real order: auto-trading with real money is switched off (LIVE_AGENTS=false).", prof.Name, sig.Reason), Data: map[string]any{"code": "LIVE_AGENTS_OFF"}})
 			}
-		}(id, prof)
+			continue
+		}
+		res := e.Propose(ctx, in)
+		if res.Error != "" {
+			e.Log.Warn("agent proposal error", "agent", id, "err", res.Error)
+		}
+		e.investAll(ctx, in)
 	}
-	wg.Wait()
 }
 
 func round2(x float64) float64 { return math.Round(x*100) / 100 }
@@ -531,7 +602,7 @@ func (e *Engine) SampleEquity(ctx context.Context) {
 
 // PublishProfiles mirrors agent profiles to Arkiv once per season.
 func (e *Engine) PublishProfiles() {
-	for id, p := range e.Agents {
+	for id, p := range e.AgentMap() {
 		w, ok := e.Wallets.Get(id)
 		if !ok {
 			continue

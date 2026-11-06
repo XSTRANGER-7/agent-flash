@@ -80,6 +80,8 @@ func main() {
 	selfCustody()
 	section("11. Gasless account (sign in, add USDC by signature, invest, withdraw)")
 	gaslessAccount()
+	section("12. Community agents (anyone makes an agent; others watch, invest, copy)")
+	communityAgents()
 	fmt.Printf("\n%d checks, %d failed, %s\n", total, fails, time.Since(start).Round(time.Second))
 	if fails > 0 {
 		os.Exit(1)
@@ -260,14 +262,14 @@ func transparency(st M) {
 	check("leaderboard formula is public", strings.Contains(s(lb, "formula"), "MaxDrawdown"), s(lb, "formula"))
 	check("3 agents ranked", len(list(lb, "rows")) == 3, "")
 	ag := list(get("/v1/agents"), "agents")
-	okA := len(ag) == 3
+	okA := len(ag) >= 3 // the 3 built-in agents, plus any community agents
 	for _, a := range ag {
 		okA = okA && strings.HasPrefix(s(a, "address"), "0x")
 	}
 	check("agent wallets public (verifiable)", okA, "every agent shows its Base address")
 	pf := get("/v1/proof")
 	nl, _ := pf["notListed"].(M)
-	check("proof page lists no paper trades", len(list(pf, "trades")) == 0 && f(nl, "paper") > 0,
+	check("proof page lists no paper trades", len(list(pf, "trades")) == 0,
 		fmt.Sprintf("%d real listed, %.0f paper only counted", len(list(pf, "trades")), f(nl, "paper")))
 	c, _, _ := do("GET", "/v1/admin/wallets", nil, false)
 	check("admin API needs the token", c == 401, fmt.Sprint("HTTP ", c))
@@ -584,9 +586,11 @@ func orderTypes() {
 		check("resting limit cancelled (signed cancel)", c == 200 && s(t, "status") == "cancelled", s(t, "status"))
 	}
 	w2 := freshWallet("DCA")
-	code, r = ticket(M{"walletId": w2, "style": "twap", "sizeUsd": 30, "twapMinutes": 10, "takeProfitPct": 3, "stopLossPct": 1})
+	// Flash charges its fixed cost on every slice ($0.02-0.19 each, it moves a
+	// lot), so 5 slices of a $60 order stay under the 2.5% cost guard.
+	code, r = ticket(M{"walletId": w2, "style": "twap", "sizeUsd": 60, "twapMinutes": 5, "takeProfitPct": 3, "stopLossPct": 1})
 	tw, _ := r["trade"].(M)
-	if check("DCA / TWAP order placed (10 slices)", code == 200 && tw != nil && s(tw, "orderType") == "twap+bracket", fmt.Sprintf("HTTP %d %s %s", code, s(r, "decision", "reason"), s(r, "error"))) {
+	if check("DCA / TWAP order placed (5 slices)", code == 200 && tw != nil && s(tw, "orderType") == "twap+bracket", fmt.Sprintf("HTTP %d %s %s", code, s(r, "decision", "reason"), s(r, "error"))) {
 		t := waitTrade(s(tw, "id"), func(t M) bool { return s(t, "bracketOrderId") != "" })
 		check("first slice filled, bracket already active", s(t, "bracketOrderId") != "", "status "+s(t, "status"))
 	}
@@ -628,6 +632,11 @@ func social() {
 	st := get("/v1/stats")
 	check("fees on every trade (monetization)", f(st, "fees", "bps") > 0 && f(st, "fees", "routedUsd") > 0,
 		fmt.Sprintf("%.0f bps, $%.2f routed, $%.4f earned", f(st, "fees", "bps"), f(st, "fees", "routedUsd"), f(st, "fees", "earnedUsd")))
+	// By now this run placed many paper trades: the proof page counts them, never lists them.
+	pf := get("/v1/proof")
+	nl, _ := pf["notListed"].(M)
+	check("proof page counts paper trades, lists none", len(list(pf, "trades")) == 0 && f(nl, "paper") > 0,
+		fmt.Sprintf("%d real listed, %.0f paper only counted", len(list(pf, "trades")), f(nl, "paper")))
 }
 
 func firstM(l []any) M {
@@ -818,6 +827,100 @@ func gaslessAccount() {
 	c, wd := meDo("POST", "/v1/me/withdraw", M{"token": "USDC"}, tok)
 	check("withdraw goes only to the signer's address", c == 200 && strings.EqualFold(s(wd, "to"), user.Address()) && f(wd, "amount") > 0,
 		fmt.Sprintf("HTTP %d, %.2f USDC to %s %s", c, f(wd, "amount"), short(s(wd, "to")), errMsg(wd)))
+}
+
+// --- 12 ----------------------------------------------------------------------
+
+// account signs a fresh key in, creates its account and deposits usd by signature.
+func account(key *evm.PrivateKey, usd float64) (tok, id string) {
+	tok, _ = signIn(key)
+	_, me := meDo("POST", "/v1/me/account", M{}, tok)
+	_, p := meDo("POST", "/v1/me/deposit/prepare", M{"amountUsd": usd}, tok)
+	meDo("POST", "/v1/me/deposit", M{"nonce": s(p, "nonce"), "signature": signTyped(key, s(p, "typedData"))}, tok)
+	return tok, s(me, "account", "id")
+}
+
+func communityAgents() {
+	maker, _, _ := evm.GenerateKey()
+	fan, _, _ := evm.GenerateKey()
+	name := "E2E Kaka " + runTag
+	rules := M{"name": name, "tagline": "Buys two red checks", "strategy": "contrarian", "streak": 2, "takeProfitPct": 1.5, "stopLossPct": 1, "sizePct": 25}
+
+	mtok, _ := signIn(maker)
+	c, _ := meDo("POST", "/v1/me/agent", rules, mtok)
+	check("an agent needs an account first", c == 409, fmt.Sprint("HTTP ", c))
+	mtok, id := account(maker, 20)
+	c, _ = meDo("POST", "/v1/me/agent", rules, "")
+	check("making an agent needs a wallet sign-in", c == 401, fmt.Sprint("HTTP ", c))
+	wide := M{}
+	for k, v := range rules {
+		wide[k] = v
+	}
+	wide["stopLossPct"] = 9
+	c, bad := meDo("POST", "/v1/me/agent", wide, mtok)
+	check("a stop loss over 5% is refused", c == 400, errMsg(bad))
+
+	c, ma := meDo("POST", "/v1/me/agent", rules, mtok)
+	check("anyone makes an agent with their wallet", c == 201 && s(ma, "agent", "id") == id && s(ma, "agent", "kind") == "contrarian",
+		fmt.Sprintf("HTTP %d, %s %s", c, s(ma, "agent", "name"), errMsg(ma)))
+	ag := get("/v1/agents/" + id)
+	check("public agent page: maker and rules shown", path(ag, "agent", "community") == true && strings.EqualFold(s(ag, "agent", "owner"), maker.Address()) &&
+		f(ag, "agent", "rules", "stopLossPct") == 1 && f(ag, "agent", "rules", "takeProfitPct") == 1.5,
+		fmt.Sprintf("by %s, TP %.1f%% SL %.1f%%", short(s(ag, "agent", "owner")), f(ag, "agent", "rules", "takeProfitPct"), f(ag, "agent", "rules", "stopLossPct")))
+	onBoard := false
+	for _, r := range list(get("/v1/leaderboard"), "rows") {
+		if s(r, "agentId") == id {
+			onBoard = path(r, "community") == true && strings.EqualFold(s(r, "owner"), maker.Address())
+		}
+	}
+	check("listed on the leaderboard as a community agent", onBoard, id)
+
+	ftok, fid := account(fan, 20)
+	c, dup := meDo("POST", "/v1/me/agent", rules, ftok)
+	check("agent names are unique", c == 409, errMsg(dup))
+	c, _ = meDo("POST", "/v1/me/invest", M{"agentId": "trendhunter", "mode": "invest"}, mtok)
+	check("an agent account cannot also invest", c == 409, fmt.Sprint("HTTP ", c))
+	c, _ = meDo("POST", "/v1/me/plans", planBody("E2E agent plan", "WETH", "interval"), mtok)
+	check("an agent account cannot also run a plan", c == 409, fmt.Sprint("HTTP ", c))
+
+	c, iv := meDo("POST", "/v1/me/invest", M{"agentId": id, "mode": "invest", "allocationPct": 25, "maxPerTradeUsd": 5, "dailyCapUsd": 15}, ftok)
+	fl := list(iv, "account", "follows")
+	check("another person invests with it", c == 200 && len(fl) == 1 && s(fl[0], "agentId") == id, fmt.Sprintf("HTTP %d %s", c, errMsg(iv)))
+	c, _ = meDo("POST", "/v1/me/agent/pause", nil, ftok)
+	check("only the maker controls the agent", c == 404, fmt.Sprint("HTTP ", c))
+
+	c, pz := meDo("POST", "/v1/me/agent/pause", nil, mtok)
+	check("maker pauses the agent", c == 200 && path(pz, "agent", "paused") == true && path(get("/v1/agents/"+id), "agent", "paused") == true, fmt.Sprint("HTTP ", c))
+	c, rz := meDo("POST", "/v1/me/agent/resume", nil, mtok)
+	check("maker resumes the agent", c == 200 && path(rz, "agent", "paused") == nil, fmt.Sprint("HTTP ", c))
+
+	// It trades on its own: two falling price checks fire the signal. The
+	// real pool price may not fall twice in a row for a while, so a quiet
+	// market is a SKIP, not a failure.
+	var own, inv M
+	for end := time.Now().Add(150 * time.Second); time.Now().Before(end) && (own == nil || inv == nil); time.Sleep(5 * time.Second) {
+		for _, t := range list(get("/v1/agents/"+id), "trades") {
+			tm, _ := t.(M)
+			switch {
+			case own == nil && s(tm, "kind") == "agent" && s(tm, "walletId") == id:
+				own = tm
+			case inv == nil && s(tm, "kind") == "invest" && s(tm, "walletId") == fid:
+				inv = tm
+			}
+		}
+	}
+	if own == nil {
+		fmt.Printf("  SKIP  %-44s %s\n", "the agent trades its own signal", "price did not fall 2 checks in a row within 150s")
+		return
+	}
+	// Size is 25% of the account (paper accounts start with paper USDC on top
+	// of the $20 deposit), so check the share, not a fixed dollar amount.
+	entry, acct := f(own, "entry"), f(get("/v1/agents/"+id), "agent", "equityUsd")
+	check("the agent trades its own signal with its rules", entry > 0 && math.Abs(f(own, "stopLoss")-entry*0.99) < entry*0.002 &&
+		f(own, "sizeUsd") > 0 && f(own, "sizeUsd") <= 0.25*acct*1.05+0.01,
+		fmt.Sprintf("$%.2f at %.2f, SL %.2f (%s)", f(own, "sizeUsd"), entry, f(own, "stopLoss"), s(own, "status")))
+	check("the investor's account trades the same signal", inv != nil && s(inv, "agentId") == id,
+		fmt.Sprintf("%s $%.2f (%s)", s(inv, "walletId"), f(inv, "sizeUsd"), s(inv, "status")))
 }
 
 func short(a string) string {

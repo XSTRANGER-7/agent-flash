@@ -299,6 +299,8 @@ Public:
 | GET | `/v1/stats` | season totals + your safety limits (used by the app) |
 | POST | `/v1/me/nonce`, `/v1/me/login` | wallet sign-in (EIP-191 message, one use) -> session token (header `X-Arena-Session`) |
 | GET / POST | `/v1/me`, `/v1/me/account`, `/v1/me/deposit/prepare`, `/v1/me/deposit`, `/v1/me/invest`, `/v1/me/stop`, `/v1/me/pause`, `/v1/me/resume`, `/v1/me/withdraw` | the signed-in person's gasless arena account |
+| POST | `/v1/me/plans`, `/v1/me/plans/{id}/{pause\|resume\|stop}` | your own auto-trade plan, run on your account (no admin token) |
+| POST | `/v1/me/agent`, `/v1/me/agent/{pause\|resume}` | make your account a **community agent** (`{name, tagline, strategy: trend\|dip\|contrarian, fast, slow, window, dipPct, streak, takeProfitPct, stopLossPct <= 5, sizePct}`): it trades its own signals, shows on the leaderboard, and anyone can watch, copy or invest with it. One job per account (agent, plan or following an agent) |
 | GET | `/v1/gas` | gas tank status (address, ETH, spent today) |
 | GET | `/v1/proof` | real-money trades only, with Flash order ids, funding wallet and Base tx hashes (page `#/proof`); paper and dry-run trades are counted, never listed |
 | POST | `/v1/predictions` | `{tradeId, voter, win}` one vote per voter |

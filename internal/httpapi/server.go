@@ -71,6 +71,8 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /v1/me/withdraw", s.me(s.meWithdraw))
 	m.HandleFunc("POST /v1/me/plans", s.me(s.mePlan))
 	m.HandleFunc("POST /v1/me/plans/{id}/{action}", s.me(s.mePlanAction))
+	m.HandleFunc("POST /v1/me/agent", s.me(s.meAgent))
+	m.HandleFunc("POST /v1/me/agent/{action}", s.me(s.meAgentAction))
 	m.HandleFunc("GET /v1/gas", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, s.E.Exec.GasTankStatus(r.Context())) })
 	m.HandleFunc("GET /v1/approvals/{id}", s.approvalGet)
 	m.HandleFunc("POST /v1/predictions", s.predict)
@@ -212,17 +214,27 @@ type agentView struct {
 	Address   string  `json:"address"`
 	Followers int     `json:"followers"`
 	EquityUSD float64 `json:"equityUsd"`
+	Community bool    `json:"community,omitempty"`
+	Owner     string  `json:"owner,omitempty"`
+	// Rules of an agent a person made (TP / SL / size, and the strategy settings).
+	Rules  *store.UserAgent `json:"rules,omitempty"`
+	Paused bool             `json:"paused,omitempty"`
 }
 
 func (s *Server) agentViews() []agentView {
 	var out []agentView
-	for id, p := range s.E.Agents {
+	for id, p := range s.E.AgentMap() {
 		w, ok := s.E.Wallets.Get(id)
 		if !ok {
 			continue
 		}
 		eq, _, _ := leaderboard.Stats(s.E.Store.Equity(id))
-		out = append(out, agentView{ID: id, Name: p.Name, Tagline: p.Tagline, Strategy: p.Strategy, Address: w.Address(), Followers: s.E.Store.FollowerCount(id), EquityUSD: eq})
+		v := agentView{ID: id, Name: p.Name, Tagline: p.Tagline, Strategy: p.Strategy, Address: w.Address(), Followers: s.E.Store.FollowerCount(id), EquityUSD: eq,
+			Community: p.Community, Owner: p.Owner}
+		if ua, ok := s.E.Store.UserAgent(id); ok {
+			v.Rules, v.Paused = &ua, ua.Paused
+		}
+		out = append(out, v)
 	}
 	return out
 }
@@ -244,7 +256,7 @@ func (s *Server) agent(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) leaderboard(w http.ResponseWriter, r *http.Request) {
 	var rows []leaderboard.Row
-	for id, p := range s.E.Agents {
+	for id, p := range s.E.AgentMap() {
 		eq, _, _ := leaderboard.Stats(s.E.Store.Equity(id))
 		_, ret, mdd := leaderboard.Stats(s.E.Store.PerfEquity(id)) // deposits are not returns
 		trades := s.E.Store.Trades(id, 0)
@@ -265,7 +277,8 @@ func (s *Server) leaderboard(w http.ResponseWriter, r *http.Request) {
 		if closed > 0 {
 			wr = float64(wins) / float64(closed) * 100
 		}
-		rows = append(rows, leaderboard.Row{AgentID: id, Name: p.Name, EquityUSD: eq, ReturnPct: ret, MaxDrawdown: mdd, Score: leaderboard.Score(ret, mdd), Trades: n, Closed: closed, Wins: wins, WinRatePct: wr, Followers: s.E.Store.FollowerCount(id)})
+		rows = append(rows, leaderboard.Row{AgentID: id, Name: p.Name, EquityUSD: eq, ReturnPct: ret, MaxDrawdown: mdd, Score: leaderboard.Score(ret, mdd), Trades: n, Closed: closed, Wins: wins, WinRatePct: wr, Followers: s.E.Store.FollowerCount(id),
+			Strategy: p.Strategy, Community: p.Community, Owner: p.Owner})
 	}
 	writeJSON(w, 200, map[string]any{"season": s.E.Cfg.SeasonID, "formula": "Return% - 0.5 * MaxDrawdown%", "rows": leaderboard.Rank(rows)})
 }
@@ -447,7 +460,7 @@ func (s *Server) follow(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "followerId must be a follower wallet in wallets.json")
 		return
 	}
-	if _, ok := s.E.Agents[f.AgentID]; !ok {
+	if _, ok := s.E.AgentMap()[f.AgentID]; !ok {
 		writeErr(w, 400, "unknown agent")
 		return
 	}
@@ -494,7 +507,7 @@ func (s *Server) propose(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
 	res := s.E.Propose(ctx, in)
-	if _, isAgent := s.E.Agents[in.WalletID]; isAgent && in.WalletID == in.AgentID {
+	if _, isAgent := s.E.AgentMap()[in.WalletID]; isAgent && in.WalletID == in.AgentID {
 		// An operator-injected agent decision also trades the agent's investors.
 		go s.E.InvestAll(context.WithoutCancel(r.Context()), in)
 	}
@@ -579,13 +592,13 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	followers := 0
-	for id := range s.E.Agents {
+	for id := range s.E.AgentMap() {
 		followers += s.E.Store.FollowerCount(id)
 	}
 	_, fresh := s.E.Prices.Snapshot(3 * s.E.Cfg.PriceEvery)
 	feeBps, _ := strconv.ParseFloat(s.E.Cfg.FeeBps, 64)
 	writeJSON(w, 200, map[string]any{
-		"season": s.E.Cfg.SeasonID, "agents": len(s.E.Agents), "trades": len(all), "openTrades": open,
+		"season": s.E.Cfg.SeasonID, "agents": len(s.E.AgentMap()), "trades": len(all), "openTrades": open,
 		"copies": copies, "volumeUsd": vol, "followers": followers, "dryRun": s.E.Cfg.DryRun, "mode": s.E.Cfg.ModeName(),
 		"priceFresh": fresh, "symbol": s.E.Cfg.TradeAsset, "chain": s.E.Cfg.Chain,
 		"fees":   map[string]any{"bps": feeBps, "routedUsd": round2(routed), "earnedUsd": round2(routed * feeBps / 10000), "paper": s.E.Cfg.Paper},
@@ -598,7 +611,7 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) follows(w http.ResponseWriter, r *http.Request) {
 	var out []store.Follow
-	for id := range s.E.Agents {
+	for id := range s.E.AgentMap() {
 		out = append(out, s.E.Store.Followers(id)...)
 	}
 	writeJSON(w, 200, map[string]any{"follows": out})
