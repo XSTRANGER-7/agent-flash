@@ -886,12 +886,20 @@ const tokenOf = (t) => t?.token || "WETH";
 // Coin amounts: tiny BTC-sized numbers keep 8 decimals.
 const amount = (v, sym) => { const n = num(v); if (!(n > 0)) return "—"; return (n < 0.01 ? n.toFixed(8) : n < 1 ? n.toFixed(6) : n.toFixed(4)) + (sym ? " " + sym : ""); };
 
+// Round coin badge at the start of a row: the ETH diamond, ₿, or a letter.
+function coinIco(sym) {
+  const s = String(sym || "").toUpperCase();
+  const inner = s.includes("ETH") ? '<svg viewBox="0 0 24 24"><path d="M12 2.5 5.6 12.4 12 16.1l6.4-3.7z"/><path d="M5.6 13.7 12 21.5l6.4-7.8L12 17.4z"/></svg>'
+    : esc(s.includes("BTC") ? "₿" : s.slice(0, 1) || "?");
+  return `<span class="t-ico" aria-hidden="true">${inner}</span>`;
+}
+
 function tradeRow(t) {
   const fill = t.fillPrice || t.quotedPrice || t.entry;
   const right = t.pnlUsd != null ? `<span class="num strong">${pnlHTML(t.pnlUsd)}</span>`
     : t.status === "filled" ? '<span class="muted small">Open</span>' : "";
   const pre = t.copyOf ? "Copy · " : t.kind === "plan" ? "Plan · " : t.kind === "self" ? "Own wallet · " : "";
-  return `<li><a class="trade-item" href="#/trade/${encodeURIComponent(t.id)}">
+  return `<li><a class="trade-item" href="#/trade/${encodeURIComponent(t.id)}">${coinIco(tokenOf(t))}
     <div class="t-main"><div class="t-title"><span class="t-name">${esc(pre)}Long ${esc(tokenOf(t))} <span class="num">${esc(usd(t.sizeUsd))}</span></span>${tradeTags(t)}${t.style && t.style !== "market" ? styleChip(t.style) : ""}</div>
       <div class="t-meta num">${t.kind === "invest" && t.walletId ? `<span class="t-who">${esc(t.walletId)}</span>` : ""}<span>${t.fillPrice ? "Fill" : "Entry"} ${esc(price(fill))}</span><span>TP ${esc(price(t.takeProfit))}</span><span>SL ${esc(price(t.stopLoss))}</span><span>${esc(ago(t.createdAt))}</span></div></div>
     <div class="t-right">${statusChip(t.status)}<div>${right}</div></div></a></li>`;
@@ -1261,19 +1269,24 @@ async function drawCard({ title, big, down = false, line = "", foot = "Every res
   const c = document.createElement("canvas");
   c.width = 1200; c.height = 630;
   const g = c.getContext("2d");
-  g.fillStyle = "#050a07"; g.fillRect(0, 0, 1200, 630);
-  g.fillStyle = "#0c1a13"; g.fillRect(0, 0, 1200, 96);
-  g.fillStyle = "#3dffa0"; g.fillRect(0, 96, 1200, 3);
-  g.fillStyle = "#e4f1e8"; g.font = "700 30px system-ui, sans-serif"; g.fillText("Agent Arena", 72, 60);
-  g.fillStyle = "#8db59d"; g.font = "600 22px ui-monospace, monospace"; g.fillText("SOCIAL TRADING ON DEFINITIVE FLASH", 600, 60);
-  let size = 76;
-  g.font = `700 ${size}px 'Palatino Linotype', Palatino, Georgia, serif`;
-  while (g.measureText(title).width > 1056 && size > 40) { size -= 4; g.font = `700 ${size}px 'Palatino Linotype', Palatino, Georgia, serif`; }
-  g.fillStyle = "#e4f1e8"; g.fillText(title, 72, 228);
-  g.fillStyle = down ? "#ff6e5e" : "#3dffa0"; g.font = "700 104px ui-monospace, monospace"; g.fillText(big, 72, 380);
-  g.fillStyle = "#8db59d"; g.font = "500 28px ui-monospace, monospace"; g.fillText(line, 72, 462);
-  g.strokeStyle = "#1d3a2a"; g.lineWidth = 2; g.beginPath(); g.moveTo(72, 520); g.lineTo(1128, 520); g.stroke();
-  g.fillStyle = "#e4f1e8"; g.font = "600 25px system-ui, sans-serif"; g.fillText(foot, 72, 572);
+  const F = "Outfit, system-ui, sans-serif";
+  try { await document.fonts?.load?.(`700 76px Outfit`); } catch { /* system font then */ }
+  // Same look as the app: a lime band with a black curve on top, then a black sheet.
+  g.fillStyle = "#030303"; g.fillRect(0, 0, 1200, 630);
+  g.fillStyle = "#bcff31"; g.fillRect(0, 0, 1200, 190);
+  g.fillStyle = "#030303"; g.beginPath(); g.ellipse(600, 0, 820, 52, 0, 0, Math.PI * 2); g.fill();
+  g.fillStyle = "#030303"; g.font = `700 34px ${F}`; g.fillText("Agent Arena", 72, 128);
+  g.font = `500 22px ${F}`; g.textAlign = "right"; g.fillText("Social trading on Definitive Flash", 1128, 128); g.textAlign = "left";
+  g.beginPath(); if (g.roundRect) g.roundRect(0, 160, 1200, 520, [48, 48, 0, 0]); else g.rect(0, 160, 1200, 520); g.fill();
+  let size = 64;
+  g.font = `700 ${size}px ${F}`;
+  while (g.measureText(title).width > 1056 && size > 36) { size -= 4; g.font = `700 ${size}px ${F}`; }
+  g.fillStyle = "#f6f6f6"; g.fillText(title, 72, 268);
+  g.fillStyle = down ? "#ff4d4f" : "#bcff31"; g.font = `700 104px ${F}`; g.fillText(big, 72, 402);
+  g.fillStyle = "#9a9a9a"; g.font = `500 28px ${F}`; g.fillText(line, 72, 466);
+  g.fillStyle = "#171717"; g.beginPath(); if (g.roundRect) g.roundRect(72, 516, 1056, 72, 36); else g.rect(72, 516, 1056, 72); g.fill();
+  g.fillStyle = "#bcff31"; g.beginPath(); g.arc(112, 552, 8, 0, Math.PI * 2); g.fill();
+  g.fillStyle = "#f6f6f6"; g.font = `500 24px ${F}`; g.fillText(foot, 136, 561);
   return new Promise((r) => c.toBlob(r, "image/png"));
 }
 const tradeCard = (t, name) => drawCard({

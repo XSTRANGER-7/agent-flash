@@ -38,11 +38,16 @@ func Handler() http.Handler {
 		switch {
 		case p == "/" || p == "/index.html" || p == "/sw.js" || p == "/manifest.webmanifest":
 			h.Set("Cache-Control", "no-cache") // SW and shell must update promptly
+		case strings.HasPrefix(p, "/fonts/"):
+			h.Set("Cache-Control", "public, max-age=31536000, immutable") // a font file never changes in place
 		default:
 			h.Set("Cache-Control", "public, max-age=3600")
 		}
-		if path.Ext(p) == ".webmanifest" {
+		switch path.Ext(p) {
+		case ".webmanifest":
 			h.Set("Content-Type", "application/manifest+json")
+		case ".woff2":
+			h.Set("Content-Type", "font/woff2")
 		}
 		files.ServeHTTP(w, r)
 	})
