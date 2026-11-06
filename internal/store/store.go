@@ -157,6 +157,8 @@ type UserAgent struct {
 	Window    int       `json:"window,omitempty"`
 	DipPct    float64   `json:"dipPct,omitempty"`
 	Streak    int       `json:"streak,omitempty"`
+	Trend     int       `json:"trend,omitempty"` // pullback: rising long average (checks)
+	Token     string    `json:"token,omitempty"` // coin it trades (symbol); empty = WETH
 	TPPct     float64   `json:"takeProfitPct"`
 	SLPct     float64   `json:"stopLossPct"`
 	SizePct   float64   `json:"sizePct"`

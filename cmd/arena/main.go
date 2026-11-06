@@ -404,6 +404,7 @@ func withEngine(log *slog.Logger, fn func(context.Context, *engine.Engine) error
 		Exec:    engine.NewExecutor(cfg, fc, rpc, log),
 		Referee: ref, Approvals: apr, Store: st, Feed: fd, Outbox: ob, Wallets: ws,
 		Prices: pf,
+		Tape:   arena.NewTape(filepath.Join(cfg.DataDir, "prices.json")),
 		Agents: roster,
 	}
 	if t, ok := ws.GasTank(); ok {
@@ -485,6 +486,7 @@ func serve(log *slog.Logger) error {
 		go e.RunAgents(ctx)
 		go e.WatchOrders(ctx)
 		go e.SampleEquity(ctx)
+		go e.RunTape(ctx)
 		go e.Outbox.Run(ctx)
 		go func() { // periodic snapshot
 			t := time.NewTicker(30 * time.Second)

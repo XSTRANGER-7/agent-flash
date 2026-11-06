@@ -53,6 +53,8 @@ type Engine struct {
 	Stream *flash.Stream
 	// TokenFeeds prices coins other than WETH (lower-case address -> feed).
 	TokenFeeds map[string]*arena.QuoteFeed
+	// Tape records timestamped prices for charts and backtests (saved to disk).
+	Tape *arena.Tape
 	// Venue is the paper exchange in MODE=paper (nil otherwise).
 	Venue *paper.Venue
 
@@ -117,11 +119,11 @@ func (e *Engine) LoadUserAgents() {
 // UserAgentProfile builds the runtime profile of an agent a person made.
 func UserAgentProfile(ua store.UserAgent) (arena.Profile, error) {
 	strat, _, err := arena.BuildStrategy(arena.StrategyParams{Kind: ua.Kind, Fast: ua.Fast, Slow: ua.Slow, Window: ua.Window, DipPct: ua.DipPct,
-		Streak: ua.Streak, TPPct: ua.TPPct, SLPct: ua.SLPct, SizePct: ua.SizePct})
+		Streak: ua.Streak, Trend: ua.Trend, TPPct: ua.TPPct, SLPct: ua.SLPct, SizePct: ua.SizePct})
 	if err != nil {
 		return arena.Profile{}, err
 	}
-	return arena.Profile{ID: ua.ID, Name: ua.Name, Tagline: ua.Tagline, Strategy: ua.Kind, Strat: strat, Community: true, Owner: ua.Owner}, nil
+	return arena.Profile{ID: ua.ID, Name: ua.Name, Tagline: ua.Tagline, Strategy: ua.Kind, Strat: strat, Community: true, Owner: ua.Owner, Token: ua.Token}, nil
 }
 
 // blockQuiet is how long the same referee block (same wallet, same code) stays
@@ -527,6 +529,26 @@ func (e *Engine) RunAgents(ctx context.Context) {
 
 // runAgent is one agent's loop: check the strategy every AGENT_EVERY and
 // trade its signals (its own wallet, then the people who invest with it).
+// agentPrices is the price history of the coin an agent trades (WETH from
+// the pool, other coins from their Flash quote feed).
+func (e *Engine) agentPrices(prof arena.Profile) (string, []float64, bool) {
+	sym := e.Cfg.TradeAsset
+	if prof.Token != "" {
+		sym = prof.Token
+	}
+	tok, ok := e.tokenBySymbol(sym)
+	if !ok || e.isWETH(tok.Address) {
+		p, fresh := e.Prices.Snapshot(3 * e.Cfg.PriceEvery)
+		return e.Cfg.TradeAsset, p, fresh
+	}
+	f := e.quoteFeed(tok.Address)
+	if f == nil {
+		return sym, nil, false
+	}
+	p, fresh := f.Snapshot(3 * e.Cfg.PriceEvery)
+	return tok.Symbol, p, fresh
+}
+
 func (e *Engine) runAgent(ctx context.Context, id string) {
 	if _, ok := e.Wallets.Get(id); !ok {
 		e.Log.Warn("agent has no wallet; skipping", "agent", id)
@@ -547,7 +569,7 @@ func (e *Engine) runAgent(ctx context.Context, id string) {
 		if ua, isUser := e.Store.UserAgent(id); isUser && ua.Paused {
 			continue // its maker paused it
 		}
-		prices, fresh := e.Prices.Snapshot(3 * e.Cfg.PriceEvery)
+		sym, prices, fresh := e.agentPrices(prof)
 		if !fresh || len(prices) == 0 {
 			continue
 		}
@@ -557,7 +579,7 @@ func (e *Engine) runAgent(ctx context.Context, id string) {
 		}
 		px := prices[len(prices)-1]
 		in := referee.Intent{
-			AgentID: id, WalletID: id, OrderType: "market+bracket", Token: e.Cfg.TradeAsset,
+			AgentID: id, WalletID: id, OrderType: "market+bracket", Token: sym,
 			SizePct: sig.SizePct, Price: px, TakeProfit: round2(px * (1 + sig.TPPct/100)), StopLoss: round2(px * (1 - sig.SLPct/100)),
 			Reason: sig.Reason,
 		}

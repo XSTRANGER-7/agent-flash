@@ -212,6 +212,9 @@ func (p *PriceFeed) push(px float64) {
 	metrics.Set("price_usd", px)
 }
 
+// Pool is the onchain reference pool (nil when prices come from Flash only).
+func (p *PriceFeed) Pool() *Pool { return p.pool }
+
 // Snapshot returns a copy of the history and whether it is fresh.
 func (p *PriceFeed) Snapshot(maxAge time.Duration) ([]float64, bool) {
 	p.mu.RLock()

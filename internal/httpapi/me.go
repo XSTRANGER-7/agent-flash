@@ -234,6 +234,11 @@ func (s *Server) meView(ctx context.Context, addr string) map[string]any {
 			out["plan"] = map[string]any{"id": p.ID, "name": p.Name, "status": p.Status}
 		}
 	}
+	subs := []engine.WalletView{}
+	for _, w := range s.mySubWallets(addr) {
+		subs = append(subs, s.E.Wallet(ctx, w, false))
+	}
+	out["wallets"] = subs
 	return out
 }
 
@@ -261,51 +266,102 @@ func (s *Server) meAgent(w http.ResponseWriter, r *http.Request, addr string) {
 		writeErr(w, 409, "your account runs the plan \""+p.Name+"\"; stop it first (one job per account)")
 		return
 	}
-	var in struct {
-		Name          string  `json:"name"`
-		Tagline       string  `json:"tagline"`
-		Strategy      string  `json:"strategy"`
-		Fast          int     `json:"fast"`
-		Slow          int     `json:"slow"`
-		Window        int     `json:"window"`
-		DipPct        float64 `json:"dipPct"`
-		Streak        int     `json:"streak"`
-		TakeProfitPct float64 `json:"takeProfitPct"`
-		StopLossPct   float64 `json:"stopLossPct"`
-		SizePct       float64 `json:"sizePct"`
-	}
-	if err := decode(r, &in); err != nil {
-		writeErr(w, 400, err.Error())
-		return
-	}
-	name, tagline := strings.TrimSpace(in.Name), strings.TrimSpace(in.Tagline)
-	switch {
-	case !agentNameRe.MatchString(name):
-		writeErr(w, 400, "name: 3-24 letters, numbers, spaces, - _ . '")
-		return
-	case len(tagline) > 80:
-		writeErr(w, 400, "tagline: up to 80 characters")
-		return
-	}
-	for _, p := range s.E.AgentMap() {
-		if strings.EqualFold(p.Name, name) {
-			writeErr(w, 409, "that name is taken")
-			return
-		}
-	}
-	_, params, err := arena.BuildStrategy(arena.StrategyParams{Kind: in.Strategy, Fast: in.Fast, Slow: in.Slow, Window: in.Window,
-		DipPct: in.DipPct, Streak: in.Streak, TPPct: in.TakeProfitPct, SLPct: in.StopLossPct, SizePct: in.SizePct})
+	ua, code, err := s.agentRules(r, wl.ID, addr, nil)
 	if err != nil {
-		writeErr(w, 400, err.Error())
+		writeErr(w, code, err.Error())
 		return
 	}
 	if !allow("agent", r, 3, time.Hour) {
 		writeErr(w, 429, "too many new agents from here; try later")
 		return
 	}
-	ua := store.UserAgent{ID: wl.ID, Name: name, Tagline: tagline, Owner: addr, Kind: params.Kind, Fast: params.Fast, Slow: params.Slow,
-		Window: params.Window, DipPct: params.DipPct, Streak: params.Streak, TPPct: params.TPPct, SLPct: params.SLPct, SizePct: params.SizePct,
+	prof, err := engine.UserAgentProfile(ua)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	name, params := ua.Name, ua
+	s.E.Store.PutUserAgent(ua)
+	_ = s.E.Store.Save()
+	s.E.AddAgent(prof)
+	s.E.Feed.Publish(feed.Post{Kind: "follow", AgentID: wl.ID, Text: fmt.Sprintf("New agent \"%s\" by %s: %s strategy, take profit %.1f%%, stop loss %.1f%%. Watch, copy or invest with it.",
+		name, addr[:6]+"…"+addr[len(addr)-4:], params.Kind, params.TPPct, params.SLPct)})
+	s.Log.Info("user agent created", "id", wl.ID, "name", name, "kind", params.Kind, "token", params.Token, "owner", addr)
+	writeJSON(w, 201, s.meView(r.Context(), addr))
+}
+
+// agentRules reads and checks an agent's settings from the request. old is
+// the agent being edited (nil when making a new one): it keeps its name
+// unless a new one is given, and its own name does not count as taken.
+func (s *Server) agentRules(r *http.Request, id, owner string, old *store.UserAgent) (store.UserAgent, int, error) {
+	var in struct {
+		Name          string  `json:"name"`
+		Tagline       string  `json:"tagline"`
+		Strategy      string  `json:"strategy"`
+		Token         string  `json:"token"`
+		Fast          int     `json:"fast"`
+		Slow          int     `json:"slow"`
+		Window        int     `json:"window"`
+		DipPct        float64 `json:"dipPct"`
+		Streak        int     `json:"streak"`
+		Trend         int     `json:"trend"`
+		TakeProfitPct float64 `json:"takeProfitPct"`
+		StopLossPct   float64 `json:"stopLossPct"`
+		SizePct       float64 `json:"sizePct"`
+	}
+	if err := decode(r, &in); err != nil {
+		return store.UserAgent{}, 400, err
+	}
+	name, tagline := strings.TrimSpace(in.Name), strings.TrimSpace(in.Tagline)
+	if old != nil && name == "" {
+		name = old.Name
+	}
+	switch {
+	case !agentNameRe.MatchString(name):
+		return store.UserAgent{}, 400, errors.New("name: 3-24 letters, numbers, spaces, - _ . '")
+	case len(tagline) > 80:
+		return store.UserAgent{}, 400, errors.New("tagline: up to 80 characters")
+	}
+	for pid, p := range s.E.AgentMap() {
+		if pid != id && strings.EqualFold(p.Name, name) {
+			return store.UserAgent{}, 409, errors.New("that name is taken")
+		}
+	}
+	token := strings.ToUpper(strings.TrimSpace(in.Token))
+	if token == "" {
+		token = s.E.Cfg.TradeAsset
+	}
+	if _, ok := s.E.Cfg.TokenBySymbol(token); !ok {
+		return store.UserAgent{}, 400, fmt.Errorf("token: one of %s", strings.Join(s.E.Cfg.TokenSymbols(), ", "))
+	}
+	_, p, err := arena.BuildStrategy(arena.StrategyParams{Kind: in.Strategy, Fast: in.Fast, Slow: in.Slow, Window: in.Window,
+		DipPct: in.DipPct, Streak: in.Streak, Trend: in.Trend, TPPct: in.TakeProfitPct, SLPct: in.StopLossPct, SizePct: in.SizePct})
+	if err != nil {
+		return store.UserAgent{}, 400, err
+	}
+	ua := store.UserAgent{ID: id, Name: name, Tagline: tagline, Owner: owner, Kind: p.Kind, Token: token, Fast: p.Fast, Slow: p.Slow,
+		Window: p.Window, DipPct: p.DipPct, Streak: p.Streak, Trend: p.Trend, TPPct: p.TPPct, SLPct: p.SLPct, SizePct: p.SizePct,
 		CreatedAt: time.Now().UTC()}
+	if old != nil {
+		ua.CreatedAt, ua.Paused = old.CreatedAt, old.Paused
+	}
+	return ua, 0, nil
+}
+
+// meAgentEdit changes the rules of the caller's agent. The new rules apply
+// from its next decision; open trades keep the take profit and stop loss
+// they were placed with.
+func (s *Server) meAgentEdit(w http.ResponseWriter, r *http.Request, addr string, wl *wallet.Wallet) {
+	old, ok := s.E.Store.UserAgent(wl.ID)
+	if !ok {
+		writeErr(w, 404, "your account is not an agent")
+		return
+	}
+	ua, code, err := s.agentRules(r, wl.ID, addr, &old)
+	if err != nil {
+		writeErr(w, code, err.Error())
+		return
+	}
 	prof, err := engine.UserAgentProfile(ua)
 	if err != nil {
 		writeErr(w, 400, err.Error())
@@ -313,11 +369,11 @@ func (s *Server) meAgent(w http.ResponseWriter, r *http.Request, addr string) {
 	}
 	s.E.Store.PutUserAgent(ua)
 	_ = s.E.Store.Save()
-	s.E.AddAgent(prof)
-	s.E.Feed.Publish(feed.Post{Kind: "follow", AgentID: wl.ID, Text: fmt.Sprintf("New agent \"%s\" by %s: %s strategy, take profit %.1f%%, stop loss %.1f%%. Watch, copy or invest with it.",
-		name, addr[:6]+"…"+addr[len(addr)-4:], params.Kind, params.TPPct, params.SLPct)})
-	s.Log.Info("user agent created", "id", wl.ID, "name", name, "kind", params.Kind, "owner", addr)
-	writeJSON(w, 201, s.meView(r.Context(), addr))
+	s.E.AddAgent(prof) // same id: replaces the rules in place
+	s.E.Feed.Publish(feed.Post{Kind: "follow", AgentID: wl.ID, Text: fmt.Sprintf("Agent \"%s\" has new rules: %s on %s, take profit %.1f%%, stop loss %.1f%%, %.0f%% a trade.",
+		ua.Name, ua.Kind, ua.Token, ua.TPPct, ua.SLPct, ua.SizePct)})
+	s.Log.Info("user agent edited", "id", wl.ID, "kind", ua.Kind, "token", ua.Token)
+	writeJSON(w, 200, s.meView(r.Context(), addr))
 }
 
 // meAgentAction pauses or resumes the caller's agent (open trades keep their TP / SL).
@@ -325,6 +381,10 @@ func (s *Server) meAgentAction(w http.ResponseWriter, r *http.Request, addr stri
 	wl, ok, err := s.myWallet(addr)
 	if err != nil || !ok {
 		writeErr(w, 409, "create your account first")
+		return
+	}
+	if r.PathValue("action") == "edit" {
+		s.meAgentEdit(w, r, addr, wl)
 		return
 	}
 	pause := r.PathValue("action") == "pause"
@@ -639,4 +699,68 @@ func (s *Server) meWithdraw(w http.ResponseWriter, r *http.Request, addr string)
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "tx": tx, "amount": amt, "token": in.Token, "to": addr, "account": s.E.Wallet(ctx, wl, false)})
+}
+
+// mySubWallets are the arena wallets whose payout is locked to addr, other
+// than the account itself (for example a copy wallet the operator made for
+// this person). The signed-in owner sees and controls them without the admin
+// token; money can still only ever go back to addr.
+func (s *Server) mySubWallets(addr string) []*wallet.Wallet {
+	acct, _, _ := s.myWallet(addr)
+	var out []*wallet.Wallet
+	for _, w := range s.E.Wallets.List("") {
+		if acct != nil && w.ID == acct.ID {
+			continue
+		}
+		if p, ok := s.E.Store.Profile(w.ID); ok && strings.EqualFold(p.Payout, addr) {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// meSubWallet runs pause | resume | stop | withdraw on one of the caller's
+// sub-wallets. Withdrawals go to the payout address, which is the caller.
+func (s *Server) meSubWallet(w http.ResponseWriter, r *http.Request, addr string) {
+	var wl *wallet.Wallet
+	for _, x := range s.mySubWallets(addr) {
+		if x.ID == r.PathValue("id") {
+			wl = x
+		}
+	}
+	if wl == nil {
+		writeErr(w, 404, "no such wallet of yours")
+		return
+	}
+	switch act := r.PathValue("action"); act {
+	case "pause", "resume":
+		s.E.Store.UpdateProfile(wl.ID, func(p *store.WalletProfile) {
+			p.Paused, p.PausedReason = act == "pause", ""
+			if act == "pause" {
+				p.PausedReason = "paused by the owner"
+			}
+		})
+	case "stop":
+		for _, f := range s.E.Store.FollowsOf(wl.ID) {
+			s.E.Store.Unfollow(wl.ID, f.AgentID)
+		}
+	case "withdraw":
+		if !allow("withdraw", r, 10, time.Hour) {
+			writeErr(w, 429, "too many withdrawals from here; try later")
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+		defer cancel()
+		tx, amt, err := s.E.Withdraw(ctx, wl.ID, "USDC", 0)
+		if err != nil {
+			writeErr(w, 400, err.Error())
+			return
+		}
+		s.Log.Info("owner withdrew from a sub-wallet", "wallet", wl.ID, "amount", amt, "tx", tx)
+	default:
+		writeErr(w, 404, "unknown action")
+		return
+	}
+	_ = s.E.Store.Save()
+	writeJSON(w, 200, s.meView(r.Context(), addr))
 }

@@ -497,9 +497,9 @@ async function pollFeed() {
 }
 
 function onPost(p) {
-  if (p.kind === "approval" && p.data?.status === "pending") {
-    toast("A copy trade is waiting for approval.", "", { label: "Review", run: () => (location.hash = "#/approvals") });
-    if (isOperator()) refreshApprovals();
+  if (p.kind === "approval" && p.data?.status === "pending" && isOperator()) {
+    toast("A copy trade is waiting for approval.", "", { label: "Review", run: () => (location.hash = "#/admin/approvals") });
+    refreshApprovals();
   }
   if (state.watch.has(p.agentId) && (p.kind === "trade_placed" || p.kind === "trade_closed")) {
     toast(p.text, "ok");
@@ -849,6 +849,9 @@ async function pageLeaderboard(page) {
 }
 
 function equityChart(points) {
+  // Skip the empty start (before the first deposit): it is not a gain.
+  const first = (points || []).findIndex((p) => +p.usd > 0);
+  points = first > 0 ? points.slice(first) : points;
   if (!points || points.length < 2) {
     return `<div class="chart-empty"><p class="eyebrow">No curve yet</p><p class="small">The equity curve starts after the first few balance snapshots, about one a minute.</p></div>`;
   }
@@ -867,6 +870,8 @@ function equityChart(points) {
 function wireChart(scope, points) {
   const chart = $("[data-chart]", scope);
   if (!chart) return;
+  const first = (points || []).findIndex((p) => +p.usd > 0);
+  points = first > 0 ? points.slice(first) : points;
   const svg = $("svg", chart), cross = $("[data-cross]", chart), tip = $("[data-tip]", chart);
   const move = (e) => {
     const r = svg.getBoundingClientRect();
@@ -981,14 +986,13 @@ async function pageAgent(page, id) {
 // The rules of an agent a person made, so anyone can judge it before copying.
 function agentRules(a) {
   const r = a.rules || {};
-  const when = { trend: `${r.fast}-check average crosses above the ${r.slow}-check one`, dip: `price is ${fixed(r.dipPct, 1)}% below its ${r.window}-check high`,
-    contrarian: `price falls ${r.streak} checks in a row` }[r.kind] || "";
-  return `<p class="chips"><span class="mini">${esc(AGENT_KIND[r.kind]?.label || r.kind || a.strategy)}</span><span class="mini">TP +${esc(fixed(r.takeProfitPct, 1))}%</span><span class="mini">SL −${esc(fixed(r.stopLossPct, 1))}%</span><span class="mini">${esc(fixed(r.sizePct, 0))}% a trade</span>${a.paused ? '<span class="mini mini-test">Paused</span>' : ""}</p>
+  const when = agentWhen(r);
+  return `<p class="chips"><span class="mini">${esc(AGENT_KIND[r.kind]?.label || r.kind || a.strategy)}</span><span class="mini">${esc(r.token || "WETH")}</span><span class="mini">TP +${esc(fixed(r.takeProfitPct, 1))}%</span><span class="mini">SL −${esc(fixed(r.stopLossPct, 1))}%</span><span class="mini">${esc(fixed(r.sizePct, 0))}% a trade</span>${a.paused ? '<span class="mini mini-test">Paused</span>' : ""}</p>
     <p class="muted small">Made by ${addrLink(a.owner)}${when ? ` · buys when ${esc(when)}` : ""}</p>`;
 }
 
 // Invest with this agent from the signed-in Arena account (no admin token).
-async function investFromAccount(btn, a) {
+async function investFromAccount(btn, a, mode = "invest") {
   if (!wallet.address || !meToken()) { location.hash = "#/me"; toast(`Connect your wallet and sign in, then pick ${a.name}.`, "ok"); return; }
   const done = busy(btn, "Loading…");
   let d;
@@ -998,7 +1002,7 @@ async function investFromAccount(btn, a) {
   if (d.agent) { toast(d.agent.id === a.id ? "This is your own agent. It already trades your account." : "Your account runs your own agent, so it can't also invest with another one.", "err"); return; }
   if (d.plan) { toast("Your account runs a plan. Stop it first to invest with an agent.", "err"); return; }
   if (!state.board) await loadBoard().catch(() => null);
-  investSheet(d, () => toast(`Open My wallet to see trades from ${a.name}.`, "ok"), a.id);
+  investSheet(d, () => toast(`Open My wallet to see trades from ${a.name}.`, "ok"), a.id, mode);
 }
 
 async function copyText(text) {
@@ -1054,7 +1058,7 @@ function renderInvestPanel(el, agent) {
       form.outerHTML = `<div class="invest-side fund-box">
         <p class="eyebrow">Wallet ready · ${esc(w.id || "")}</p>
         <p class="fund-addr mono">${esc(w.address || "")}</p>
-        <div class="btn-row"><button type="button" class="btn btn-primary btn-sm" data-copy-fund>Copy address</button>${isAddr(w.address) ? `<a class="btn btn-ghost btn-sm" href="https://basescan.org/address/${esc(w.address)}" ${EXT}>View on Basescan</a>` : ""}<a class="btn btn-ghost btn-sm" href="#/wallets">Open wallets</a></div>
+        <div class="btn-row"><button type="button" class="btn btn-primary btn-sm" data-copy-fund>Copy address</button>${isAddr(w.address) ? `<a class="btn btn-ghost btn-sm" href="https://basescan.org/address/${esc(w.address)}" ${EXT}>View on Basescan</a>` : ""}<a class="btn btn-ghost btn-sm" href="#/admin/wallets">Open wallets</a></div>
         <p class="small">${esc(r.fund || "")}</p>
         <p class="alert">Send USDC on the Base network only. Tokens sent on another network are lost.</p>
       </div>`;
@@ -1069,7 +1073,9 @@ async function renderCopyPanel(el, agent) {
   if (!isOperator()) {
     el.innerHTML = `<div class="panel" data-reveal><p class="eyebrow">Copy trading</p><h3 class="panel-title">Copy ${esc(agent.name)}</h3>
       <p class="chips"><span class="mini">Same TP / SL</span><span class="mini">Your limits</span><span class="mini">Over ${esc(threshold)} needs a yes</span></p>
-      <div class="btn-row"><button type="button" class="btn btn-ghost btn-sm" data-signin-open>Sign in to copy</button></div></div>`;
+      <p class="small muted">Your Arena account copies each trade it places, with your own limits. Withdrawals only go back to your wallet.</p>
+      <div class="btn-row"><button type="button" class="btn btn-primary btn-sm" data-copy-me>Copy from my account</button></div></div>`;
+    $("[data-copy-me]", el).addEventListener("click", (e) => investFromAccount(e.currentTarget, agent, "copy"));
     return;
   }
   el.innerHTML = `<div class="panel"><p class="eyebrow">Copy trading</p><h3 class="panel-title">Copy ${esc(agent.name)}</h3><div class="skel skel-row"></div></div>`;
@@ -1146,14 +1152,88 @@ async function pageTrade(page, id) {
     if (sig === lastSig) return;
     lastSig = sig;
     renderTrade(body, data);
+    wireTradeChart(body);
   };
   draw(d);
+  const chart = async () => {
+    const el = $("[data-tchart]", body);
+    if (!el) return;
+    try { const c = await api(`/v1/trades/${enc(id)}/chart`); tchartCache.set(id, tradeChartHTML(c)); el.innerHTML = tchartCache.get(id); wireTradeChart(body, c); }
+    catch { if (!tchartCache.has(id)) el.innerHTML = ""; }
+  };
+  chart();
   const refresh = async () => {
     if (!OPEN.has(d.trade.status)) return; // closed and dry-run trades don't change
     try { d = await api("/v1/trades/" + encodeURIComponent(id)); draw(d); } catch { /* keep last */ }
+    chart();
   };
-  const t = setInterval(refresh, 10000);
+  const t = setInterval(refresh, 15000);
   return { onPost: (p) => { if (p.tradeId === id) refresh(); }, cleanup: () => clearInterval(t) };
+}
+
+// Live trade chart: the price since just before the trade, its take-profit,
+// stop-loss, entry and break-even lines, what happened when, and what it is
+// worth right now. Cached per trade so a re-render never flashes empty.
+const tchartCache = new Map(), tchartData = new Map();
+function tradeChartHTML(c) {
+  const pts = (c.points || []).filter((p) => p.p > 0);
+  if (pts.length < 2) return `<div class="chart-empty"><p class="eyebrow">No price record yet</p><p class="small">The chart fills in as prices are recorded, one every 15 seconds.</p></div>`;
+  const W = 640, H = 260, PL = 6, PR = 6, PT = 12, PB = 10;
+  const t0 = pts[0].t, t1 = Math.max(pts.at(-1).t, c.createdAt || 0);
+  const lines = [["tp", c.takeProfit, "Target"], ["sl", c.stopLoss, "Stop"], ["en", c.entry, c.status === "placed" ? "Entry" : "Bought"], ["be", c.breakEven, "Break-even"], ["ex", c.exit, "Sold"]].filter((l) => +l[1] > 0);
+  const vals = pts.map((p) => p.p).concat(lines.map((l) => +l[1]));
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  const pad = (hi - lo) * 0.08 || hi * 0.002;
+  lo -= pad; hi += pad;
+  const X = (t) => PL + ((t - t0) / (t1 - t0 || 1)) * (W - PL - PR), Y = (v) => PT + (1 - (v - lo) / (hi - lo || 1)) * (H - PT - PB);
+  const d = pts.map((p, i) => `${i ? "L" : "M"}${X(p.t).toFixed(1)} ${Y(p.p).toFixed(1)}`).join("");
+  const last = pts.at(-1), up = c.entry > 0 ? last.p >= c.entry : last.p >= pts[0].p;
+  const at = (t) => { let best = pts[0]; for (const p of pts) { if (Math.abs(p.t - t) < Math.abs(best.t - t)) best = p; } return best.p; };
+  const guide = lines.map(([k, v, label]) => `<line class="tl tl-${k}" x1="${PL}" x2="${W - PR}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"/><text class="tt tt-${k}" x="${W - PR - 4}" y="${(Y(v) - 4).toFixed(1)}" text-anchor="end">${esc(label)} ${esc(price(v))}</text>`).join("");
+  const start = c.createdAt >= t0 ? `<line class="tl tl-start" x1="${X(c.createdAt).toFixed(1)}" x2="${X(c.createdAt).toFixed(1)}" y1="${PT}" y2="${H - PB}"/>` : "";
+  const evs = (c.events || []).filter((e) => e.t >= t0 && e.t <= t1).map((e) => `<circle class="tev tev-${esc(e.kind)}" cx="${X(e.t).toFixed(1)}" cy="${Y(at(e.t)).toFixed(1)}" r="5"><title>${esc(e.label)} · ${esc(clock(new Date(e.t)))}</title></circle>`).join("");
+  const now = `<circle class="tnow ${c.open ? "is-live" : ""}" cx="${X(last.t).toFixed(1)}" cy="${Y(last.p).toFixed(1)}" r="5"/>`;
+  const span = (t1 - t0) / 60000, ago = span >= 120 ? `${fixed(span / 60, 1)} h` : `${Math.round(span)} min`;
+  // Where the price sits between the stop (0%) and the target (100%).
+  let meter = "";
+  if (c.open && c.stopLoss > 0 && c.takeProfit > c.stopLoss && c.now > 0) {
+    const k = (v) => Math.min(100, Math.max(0, ((v - c.stopLoss) / (c.takeProfit - c.stopLoss)) * 100));
+    meter = `<div class="tmeter" role="img" aria-label="Price is ${esc(fixed(k(c.now), 0))}% of the way from the stop to the target">
+      <div class="tmeter-bar"><i class="tmeter-en" data-x="${k(c.entry).toFixed(1)}"></i><i class="tmeter-now ${c.now >= c.entry ? "up" : "down"}" data-x="${k(c.now).toFixed(1)}"></i></div>
+      <div class="tmeter-axis num"><span class="down">Stop ${esc(price(c.stopLoss))}${known(c.toStopPct) ? ` · ${esc(fixed(c.toStopPct, 2))}% away` : ""}</span><span class="up">Target ${esc(price(c.takeProfit))}${known(c.toTargetPct) ? ` · ${esc(fixed(c.toTargetPct, 2))}% away` : ""}</span></div></div>`;
+  }
+  const live = c.open && known(c.pnlUsd)
+    ? `<div class="tlive"><div><span class="muted small">Now</span><b class="num">${esc(price(c.now))}</b></div><div><span class="muted small">If sold now (before Flash's sell cost)</span><b class="num">${pnlHTML(c.pnlUsd)} <small class="${c.pnlPct >= 0 ? "up" : "down"}">${esc(pct(c.pnlPct, 2))}</small></b></div><div><span class="muted small">Worth</span><b class="num">${esc(usd(c.valueUsd, 2))}</b></div></div>` : "";
+  return `${live}${meter}<div class="chart tchart-box" data-chart-t>
+    <svg class="tsvg ${up ? "is-up" : "is-down"}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(c.token)} price over the last ${esc(ago)}: ${esc(price(pts[0].p))} to ${esc(price(last.p))}">
+      ${[0.25, 0.5, 0.75].map((q) => `<line class="grid-line" x1="0" x2="${W}" y1="${(H * q).toFixed(0)}" y2="${(H * q).toFixed(0)}"/>`).join("")}
+      ${start}<path class="area" d="${d}L${X(last.t).toFixed(1)} ${H}L${X(pts[0].t).toFixed(1)} ${H}Z"/><path class="line" d="${d}"/>${guide}${evs}${now}
+      <line class="cross" data-cross x1="0" x2="0" y1="0" y2="${H}" visibility="hidden"/></svg>
+    <div class="chart-axis num"><span>${esc(ago)} ago</span><span>${c.open ? "now" : esc(clock(new Date(t1)))}</span></div><div class="tip num" data-tip hidden></div></div>
+    <p class="legend small muted tlegend"><span><i class="lg lg-tp"></i>Target</span><span><i class="lg lg-sl"></i>Stop</span><span><i class="lg lg-en"></i>Bought</span>${c.breakEven > 0 ? '<span><i class="lg lg-be"></i>Break-even</span>' : ""}<span><i class="lg lg-ev"></i>Events</span></p>`;
+}
+function wireTradeChart(scope, c) {
+  const box = $("[data-chart-t]", scope);
+  if (!box) return;
+  const id = location.hash.split("/")[2] || "";
+  if (c) tchartData.set(id, c); else c = tchartData.get(id);
+  $$(".tmeter i[data-x]", scope).forEach((el) => el.style.setProperty("left", el.dataset.x + "%"));
+  const pts = (c?.points || []).filter((p) => p.p > 0);
+  if (pts.length < 2) return;
+  const svg = $("svg", box), cross = $("[data-cross]", box), tip = $("[data-tip]", box);
+  const t0 = pts[0].t, t1 = Math.max(pts.at(-1).t, c.createdAt || 0);
+  svg.addEventListener("pointermove", (e) => {
+    const r = svg.getBoundingClientRect(), k = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), t = t0 + k * (t1 - t0);
+    let best = pts[0];
+    for (const p of pts) { if (Math.abs(p.t - t) < Math.abs(best.t - t)) best = p; }
+    const x = 6 + ((best.t - t0) / (t1 - t0 || 1)) * (640 - 12);
+    cross.setAttribute("x1", x); cross.setAttribute("x2", x); cross.setAttribute("visibility", "visible");
+    tip.hidden = false;
+    tip.style.setProperty("left", Math.min(85, Math.max(15, (x / 640) * 100)) + "%");
+    const diff = c.entry > 0 ? ` · ${pct((best.p / c.entry - 1) * 100, 2)} vs buy` : "";
+    tip.textContent = `${price(best.p)} · ${clock(new Date(best.t))}${diff}`;
+  });
+  svg.addEventListener("pointerleave", () => { cross.setAttribute("visibility", "hidden"); tip.hidden = true; });
 }
 
 function renderTrade(body, d) {
@@ -1200,6 +1280,8 @@ function renderTrade(body, d) {
       <div class="stat"><dt>${t.fillPrice ? "Fill" : "Entry"}</dt><dd class="num">${esc(price(entry))}</dd></div>
       <div class="stat"><dt>Cost</dt><dd class="num">${known(t.entryCostPct) ? esc(fixed(t.entryCostPct, 2)) + "%" : known(t.entryCostUsd) ? esc(usd(t.entryCostUsd, 3)) : "—"}</dd></div>
     </dl>
+
+    <section class="tchart" data-tchart aria-label="Price chart of this trade">${tchartCache.get(t.id) || '<div class="skel skel-row"></div>'}</section>
 
     <div class="ladder" data-reveal aria-label="Stop loss ${esc(price(t.stopLoss))}, entry ${esc(price(entry))}${known(be) ? ", break-even " + esc(price(be)) : ""}, take profit ${esc(price(t.takeProfit))}">
       <div class="ladder-bar"></div>
@@ -1671,8 +1753,8 @@ async function pageOperator(page) {
   }
   page.innerHTML = `<header class="page-head page-head-row"><div><p class="eyebrow" data-reveal>Signed in</p><h1 data-reveal>Operator</h1></div><div class="btn-row"><button class="btn btn-primary btn-sm" data-new-order disabled>New order</button><button class="btn btn-plain btn-sm" data-logout>Sign out</button></div></header>
     <nav class="hub" aria-label="Operator tools" data-reveal>
-      <a class="hub-item" href="#/wallets"><b>Wallets</b><span>Balances, limits, withdraw</span></a>
-      <a class="hub-item" href="#/approvals"><b>Approvals <span class="count" data-approvals-count hidden></span></b><span>Big copies waiting for a yes</span></a>
+      <a class="hub-item" href="#/admin/wallets"><b>Wallets</b><span>Balances, limits, withdraw</span></a>
+      <a class="hub-item" href="#/admin/approvals"><b>Approvals <span class="count" data-approvals-count hidden></span></b><span>Big copies waiting for a yes</span></a>
       <a class="hub-item" href="#/plans"><b>Auto-trade</b><span>Plans and what they're doing</span></a>
       <a class="hub-item" href="#/feed"><b>Live feed</b><span>Every decision, live</span></a>
       <a class="hub-item" href="#/leaderboard"><b>Leaderboard</b><span>Ranked by Arena Score</span></a>
@@ -1684,7 +1766,7 @@ async function pageOperator(page) {
       <section><div class="section-head"><h2>Flash</h2></div><div class="panel" data-flash><div class="skel skel-row"></div></div></section>
     </div>
     <div class="section-head section"><h2>Test trade</h2>${infoBtn("test")}</div><div data-testpanel><div class="skel skel-row"></div></div>
-    <div class="section-head section"><h2>Wallets</h2><a class="btn btn-ghost btn-sm" href="#/wallets">Manage</a></div><div data-wallets><div class="skel skel-row"></div></div>
+    <div class="section-head section"><h2>Wallets</h2><a class="btn btn-ghost btn-sm" href="#/admin/wallets">Manage</a></div><div data-wallets><div class="skel skel-row"></div></div>
     <div class="section-head section"><h2>Manual agent trade</h2></div><form class="panel" data-propose novalidate></form>
     ${installBlock()}`;
   $("[data-logout]", page).addEventListener("click", () => { store.del("arena.admin", true); state.pendingApprovals = 0; updateChrome(); toast("Signed out", "ok"); route(); });
@@ -1710,7 +1792,7 @@ async function pageOperator(page) {
     // Agents first, then the first few people; the full list lives on Wallets.
     const shown = [...wallets.filter((w) => w.role === "agent"), ...wallets.filter((w) => w.role !== "agent")].slice(0, 8);
     const rest = wallets.length - shown.length;
-    $("[data-wallets]", page).innerHTML = wallets.length ? `<table class="table table-plain"><thead><tr><th>Wallet</th><th class="hide-sm">Role</th><th>Address</th><th class="r">USDC</th><th class="r hide-sm">WETH</th></tr></thead><tbody data-stagger>${shown.map((w) => `<tr><td><strong>${esc(w.agentName || w.profile?.owner || w.id)}</strong>${w.profile?.paused ? ' <span class="mini mini-test">Paused</span>' : ""}</td><td class="hide-sm muted">${esc(w.role === "agent" ? "Agent" : "Person")}</td><td>${addrLink(w.address)}</td><td class="r num">${esc(fixed(w.usdc, 2))}</td><td class="r num hide-sm">${esc(fixed(w.weth, 6))}</td></tr>`).join("")}${rest > 0 ? `<tr><td colspan="5"><a class="link" href="#/wallets">+${esc(rest)} more on Wallets</a></td></tr>` : ""}</tbody></table>`
+    $("[data-wallets]", page).innerHTML = wallets.length ? `<table class="table table-plain"><thead><tr><th>Wallet</th><th class="hide-sm">Role</th><th>Address</th><th class="r">USDC</th><th class="r hide-sm">WETH</th></tr></thead><tbody data-stagger>${shown.map((w) => `<tr><td><strong>${esc(w.agentName || w.profile?.owner || w.id)}</strong>${w.profile?.paused ? ' <span class="mini mini-test">Paused</span>' : ""}</td><td class="hide-sm muted">${esc(w.role === "agent" ? "Agent" : "Person")}</td><td>${addrLink(w.address)}</td><td class="r num">${esc(fixed(w.usdc, 2))}</td><td class="r num hide-sm">${esc(fixed(w.weth, 6))}</td></tr>`).join("")}${rest > 0 ? `<tr><td colspan="5"><a class="link" href="#/admin/wallets">+${esc(rest)} more on Wallets</a></td></tr>` : ""}</tbody></table>`
       : emptyState("No wallets", "Run arena keygen, fund the addresses and restart the server.");
   } catch (err) { $("[data-wallets]", page).innerHTML = errorState(err); }
 
@@ -2901,7 +2983,7 @@ function accountHTML(d) {
   }
   const f = (a.follows || [])[0], paused = a.profile?.paused, ag = d.agent, plan = d.plan;
   const agent = f ? (state.board?.rows || []).find((r) => r.agentId === f.agentId)?.name || f.agentId : "";
-  const link = ag ? `Your agent <a class="link" href="#/agent/${enc(ag.id)}">${esc(ag.name)}</a> · ${esc(AGENT_KIND[ag.kind]?.label || ag.kind)} · take profit ${esc(fixed(ag.takeProfitPct, 1))}% · stop loss ${esc(fixed(ag.stopLossPct, 1))}% · ${esc(fixed(ag.sizePct, 0))}% a trade${ag.paused ? " · <b>paused</b>" : ""}`
+  const link = ag ? `Your agent <a class="link" href="#/agent/${enc(ag.id)}">${esc(ag.name)}</a> · ${esc(AGENT_KIND[ag.kind]?.label || ag.kind)} on ${esc(ag.token || "WETH")} · take profit ${esc(fixed(ag.takeProfitPct, 1))}% · stop loss ${esc(fixed(ag.stopLossPct, 1))}% · ${esc(fixed(ag.sizePct, 0))}% a trade${ag.paused ? " · <b>paused</b>" : ""}`
     : plan ? `Running your plan <a class="link" href="#/plan/${enc(plan.id)}">${esc(plan.name)}</a> (${esc(plan.status)})`
     : f ? `${f.mode === "copy" ? "Copying" : "Investing with"} <b>${esc(agent)}</b> · ${f.allocationPct ? esc(f.allocationPct) + "%" : "agent's size"} a trade, max ${esc(usd(f.maxPerTradeUsd))}` : "Not linked to an agent yet";
   return `<div class="action-row"><div><p class="eyebrow">Arena account ${paused ? '<span class="mini mini-test">Paused</span>' : ""}</p>
@@ -2914,7 +2996,7 @@ function accountHTML(d) {
     </dl>
     <p class="acct-link">${link}</p>
     <div class="btn-row"><button type="button" class="btn btn-primary" data-acct-add>Add funds</button>
-      ${ag ? `<a class="btn btn-ghost" href="#/agent/${enc(ag.id)}">View my agent</a><button type="button" class="btn btn-ghost" data-acct-agent-pause>${ag.paused ? "Resume agent" : "Pause agent"}</button>`
+      ${ag ? `<a class="btn btn-ghost" href="#/agent/${enc(ag.id)}">View my agent</a><button type="button" class="btn btn-ghost" data-acct-agent-edit>Edit rules</button><button type="button" class="btn btn-ghost" data-acct-agent-pause>${ag.paused ? "Resume agent" : "Pause agent"}</button>`
         : plan ? `<a class="btn btn-ghost" href="#/plan/${enc(plan.id)}">View my plan</a>`
         : `<button type="button" class="btn btn-ghost" data-acct-invest>${f ? "Change agent" : "Pick an agent"}</button>${f ? "" : '<button type="button" class="btn btn-ghost" data-acct-make-agent>Make my own agent</button>'}`}
       <button type="button" class="btn btn-ghost" data-acct-withdraw ${a.usdc > 0 ? "" : "disabled"}>Withdraw</button>
@@ -2938,7 +3020,7 @@ async function renderAccount(box, onChange) {
   let d;
   try { d = await api("/v1/me", { me: true }); } catch (err) { box.innerHTML = errorState(err); return; }
   if (!state.board) await loadBoard().catch(() => null);
-  box.innerHTML = accountHTML(d);
+  box.innerHTML = accountHTML(d) + subWalletsHTML(d);
   const act = async (btn, label, fn) => {
     const done = busy(btn, label);
     try { await fn(); await renderAccount(box, onChange); onChange?.(); }
@@ -2961,76 +3043,171 @@ async function renderAccount(box, onChange) {
   $("[data-acct-pause]", box)?.addEventListener("click", (e) => act(e.currentTarget, "Saving…", async () => {
     await api(d.account?.profile?.paused ? "/v1/me/resume" : "/v1/me/pause", { method: "POST", me: true, body: {} });
   }));
-  $("[data-acct-make-agent]", box)?.addEventListener("click", () => agentSheet(() => renderAccount(box, onChange)));
+  $("[data-acct-make-agent]", box)?.addEventListener("click", () => agentSheet(() => renderAccount(box, onChange), null, d.account?.usdc));
+  $("[data-acct-agent-edit]", box)?.addEventListener("click", () => agentSheet(() => renderAccount(box, onChange), d.agent, d.account?.usdc));
   $("[data-acct-agent-pause]", box)?.addEventListener("click", (e) => act(e.currentTarget, "Saving…", async () => {
     await api(d.agent?.paused ? "/v1/me/agent/resume" : "/v1/me/agent/pause", { method: "POST", me: true, body: {} });
     toast(d.agent?.paused ? "Your agent is trading again" : "Your agent is paused. Open trades keep their stop loss.", "ok");
   }));
+  $$("[data-sub]", box).forEach((b) => b.addEventListener("click", async (e) => {
+    const btn = e.currentTarget, [id, action] = btn.dataset.sub.split("|");
+    if (action === "withdraw" && !(await confirmDialog("Withdraw its USDC?", `It goes to your wallet ${short(d.address)}, the only address it can go to. An open trade keeps running.`, "Withdraw", { money: true }))) return;
+    if (action === "stop" && !(await confirmDialog("Stop copying?", "No new trades are copied. An open trade keeps its take profit and stop loss.", "Stop"))) return;
+    await act(btn, "Saving…", async () => {
+      await api(`/v1/me/wallets/${enc(id)}/${action}`, { method: "POST", me: true, body: {}, timeout: 120000 });
+      toast({ pause: "Paused", resume: "Trading again", stop: "Stopped copying", withdraw: "USDC sent to your wallet" }[action], "ok");
+    });
+  }));
+}
+
+// Sub-wallets whose payout is locked to this person (e.g. a copy wallet):
+// balances, what each follows, its open trade, and owner controls.
+function subWalletsHTML(d) {
+  const ws = d.wallets || [];
+  if (!ws.length) return "";
+  const name = (id) => (state.board?.rows || []).find((r) => r.agentId === id)?.name || id;
+  return `<div class="section-head section-tight"><h3>Your sub-wallets</h3><span class="muted small num">${ws.length}</span></div>
+    <ul class="subs">${ws.map((w) => {
+      const f = (w.follows || [])[0], paused = w.profile?.paused, open = w.openTrade;
+      return `<li class="sub"><div class="sub-top"><div><b>${esc(w.profile?.owner || w.id)}</b> ${paused ? '<span class="mini mini-test">Paused</span>' : ""}
+          <div class="muted small">${addrLink(w.address)} · payout locked to you</div></div>
+          <div class="sub-eq num">${esc(usd(w.equityUsd))}<small>${pnlHTML(w.pnlUsd)}</small></div></div>
+        <p class="small">${f ? `${f.mode === "copy" ? "Copies" : "Invests with"} <a class="link" href="#/agent/${enc(f.agentId)}">${esc(name(f.agentId))}</a> · ${f.allocationPct ? esc(f.allocationPct) + "%" : "agent's size"} a trade, max ${esc(usd(f.maxPerTradeUsd))}, ${esc(usd(f.dailyCapUsd))} a day` : "Not following an agent"}
+          · USDC ${esc(fixed(w.usdc, 2))} · ${esc(tokenOf(open))} ${esc(fixed(w.weth, 6))}</p>
+        ${open ? `<a class="sub-open" href="#/trade/${enc(open.id)}">Open trade: ${esc(usd(open.sizeUsd))} at ${esc(price(open.fillPrice || open.entry))} · TP ${esc(price(open.takeProfit))} · SL ${esc(price(open.stopLoss))} ›</a>` : ""}
+        <div class="btn-row"><button type="button" class="btn btn-ghost btn-sm" data-sub="${esc(w.id)}|${paused ? "resume" : "pause"}">${paused ? "Resume" : "Pause"}</button>
+          ${f ? `<button type="button" class="btn btn-ghost btn-sm" data-sub="${esc(w.id)}|stop">Stop copying</button>` : ""}
+          <button type="button" class="btn btn-ghost btn-sm" data-sub="${esc(w.id)}|withdraw" ${w.usdc > 0 ? "" : "disabled"}>Withdraw USDC</button></div></li>`;
+    }).join("")}</ul>`;
 }
 
 // The strategies a person can give their agent (same code as the built-in agents).
 const AGENT_KIND = {
-  trend: { label: "Trend", line: "Buys when the short average crosses above the long one" },
+  pullback: { label: "Dip in an uptrend", line: "Buys a pullback only while the longer trend is rising. Fewer, better trades" },
   dip: { label: "Dip buyer", line: "Buys when price falls a set % below its recent high" },
+  trend: { label: "Trend", line: "Buys when the short average crosses above the long one" },
   contrarian: { label: "Contrarian", line: "Buys after price falls several checks in a row" },
 };
+const agentWhen = (r) => ({
+  trend: `the ${r.fast}-check average crosses above the ${r.slow}-check one`,
+  dip: `price is ${fixed(r.dipPct, 1)}% below its ${r.window}-check high`,
+  pullback: `price is ${fixed(r.dipPct, 2)}% below its ${r.window}-check high while the ${r.trend}-check average is rising`,
+  contrarian: `price falls ${r.streak} checks in a row`,
+}[r.kind || r.strategy] || "");
 
-function agentSheet(after) {
-  const sb = openSheet("Make your agent", { wide: true });
+// Make or edit an agent. `old` = the agent's current rules (edit), `usdc` =
+// the account's USDC (to show the $ size of a trade and test with it).
+async function agentSheet(after, old = null, usdc = 0) {
+  const sb = openSheet(old ? "Edit your agent" : "Make your agent", { wide: true });
+  sb.innerHTML = `<div class="sheet-body"><div class="skel skel-row"></div></div>`;
+  const toks = await api("/v1/tokens").then((d) => d.tokens || []).catch(() => [{ symbol: "WETH" }]);
+  const v0 = old || { kind: "pullback", token: toks[0]?.symbol || "WETH", window: 40, dipPct: 0.5, trend: 120, fast: 5, slow: 20, streak: 4, takeProfitPct: 2, stopLossPct: 1.2, sizePct: 50 };
+  const val = (k, d) => esc(v0[k] ?? d);
   sb.innerHTML = `<form class="sheet-body" data-agent-form novalidate>
-      <p class="sheet-text">It trades its own signals from your account. It shows on the leaderboard, and anyone can watch, copy or invest with it.</p>
+      <p class="sheet-text">${old ? "New rules apply from its next decision. Open trades keep their take profit and stop loss." : "It trades its own signals from your account. It shows on the leaderboard, and anyone can watch, copy or invest with it."}</p>
       <div class="form-grid form-2">
-        <div class="field"><label for="ag-name">Name</label><input id="ag-name" name="name" maxlength="24" autocomplete="off" placeholder="Steady Eddie" required><span class="hint">3-24 letters or numbers, must be unique</span></div>
-        <div class="field"><label for="ag-tag">One line about it</label><input id="ag-tag" name="tagline" maxlength="80" autocomplete="off" placeholder="Buys panic, sells the bounce"></div>
+        <div class="field"><label for="ag-name">Name</label><input id="ag-name" name="name" maxlength="24" autocomplete="off" placeholder="Steady Eddie" value="${val("name", "")}" required><span class="hint">3-24 letters or numbers, must be unique</span></div>
+        <div class="field"><label for="ag-tag">One line about it</label><input id="ag-tag" name="tagline" maxlength="80" autocomplete="off" placeholder="Buys pullbacks in an uptrend" value="${val("tagline", "")}"></div>
       </div>
-      <div class="field field-gap"><span class="label">Strategy</span>
-        <div class="choice-grid choice-wide">${Object.entries(AGENT_KIND).map(([k, s], i) => `<label class="choice"><input type="radio" name="strategy" value="${k}" ${i === 2 ? "checked" : ""}><span class="choice-body"><b>${esc(s.label)}</b><span class="muted small">${esc(s.line)}</span></span></label>`).join("")}</div></div>
+      <div class="field field-gap"><span class="label">Coin it trades</span>
+        <div class="seg seg-full" role="radiogroup" aria-label="Coin">${toks.map((t) => `<label><input type="radio" name="token" value="${esc(t.symbol)}" ${(v0.token || "WETH") === t.symbol ? "checked" : ""}><span>${esc(t.symbol)}</span></label>`).join("")}</div>
+        <span class="hint">Bought with USDC on Base through Flash</span></div>
+      <div class="field field-gap"><span class="label">Brain (strategy)</span>
+        <div class="choice-grid choice-wide">${Object.entries(AGENT_KIND).map(([k, s]) => `<label class="choice"><input type="radio" name="strategy" value="${k}" ${(v0.kind || "pullback") === k ? "checked" : ""}><span class="choice-body"><b>${esc(s.label)}</b><span class="muted small">${esc(s.line)}</span></span></label>`).join("")}</div></div>
       <div class="form-grid form-3 field-gap">
-        <div class="field" data-ak="trend" hidden><label for="ag-fast">Short average (checks)</label><input id="ag-fast" name="fast" type="number" min="2" max="30" step="1" value="5" inputmode="numeric"><span class="hint">One check every 15 seconds</span></div>
-        <div class="field" data-ak="trend" hidden><label for="ag-slow">Long average (checks)</label><input id="ag-slow" name="slow" type="number" min="3" max="120" step="1" value="20" inputmode="numeric"></div>
-        <div class="field" data-ak="dip" hidden><label for="ag-dip">Drop (%)</label><input id="ag-dip" name="dipPct" type="number" min="0.2" max="20" step="0.1" value="1.5" inputmode="decimal"><span class="hint">Below the recent high</span></div>
-        <div class="field" data-ak="dip" hidden><label for="ag-win">Recent high over (checks)</label><input id="ag-win" name="window" type="number" min="5" max="240" step="1" value="20" inputmode="numeric"></div>
-        <div class="field" data-ak="contrarian"><label for="ag-streak">Falling checks in a row</label><input id="ag-streak" name="streak" type="number" min="2" max="20" step="1" value="4" inputmode="numeric"><span class="hint">Fewer = trades more often</span></div>
+        <div class="field" data-ak="trend" hidden><label for="ag-fast">Short average (checks)</label><input id="ag-fast" name="fast" type="number" min="2" max="30" step="1" value="${val("fast", 5)}" inputmode="numeric"><span class="hint">One check every 15 seconds</span></div>
+        <div class="field" data-ak="trend" hidden><label for="ag-slow">Long average (checks)</label><input id="ag-slow" name="slow" type="number" min="3" max="120" step="1" value="${val("slow", 20)}" inputmode="numeric"></div>
+        <div class="field" data-ak="dip pullback" hidden><label for="ag-dip">Drop (%)</label><input id="ag-dip" name="dipPct" type="number" min="0.1" max="20" step="0.05" value="${val("dipPct", 0.5)}" inputmode="decimal"><span class="hint">Below the recent high</span></div>
+        <div class="field" data-ak="dip pullback" hidden><label for="ag-win">Recent high over (checks)</label><input id="ag-win" name="window" type="number" min="5" max="240" step="1" value="${val("window", 40)}" inputmode="numeric"><span class="hint">40 checks = 10 minutes</span></div>
+        <div class="field" data-ak="pullback" hidden><label for="ag-trend">Trend length (checks)</label><input id="ag-trend" name="trend" type="number" min="20" max="360" step="1" value="${val("trend", 120)}" inputmode="numeric"><span class="hint">Its average must be rising. 120 = 30 min</span></div>
+        <div class="field" data-ak="contrarian" hidden><label for="ag-streak">Falling checks in a row</label><input id="ag-streak" name="streak" type="number" min="2" max="20" step="1" value="${val("streak", 4)}" inputmode="numeric"><span class="hint">Fewer = more trades, more noise</span></div>
       </div>
       <div class="form-grid form-3 field-gap">
-        <div class="field"><label for="ag-tp">Take profit (%)</label><input id="ag-tp" name="takeProfitPct" type="number" min="0.6" max="20" step="0.1" value="1.5" inputmode="decimal"></div>
-        <div class="field"><label for="ag-sl">Stop loss (%)</label><input id="ag-sl" name="stopLossPct" type="number" min="0.3" max="5" step="0.1" value="1" inputmode="decimal"><span class="hint">Every trade has one, up to 5%</span></div>
-        <div class="field"><label for="ag-size">Per trade (% of your USDC)</label><input id="ag-size" name="sizePct" type="number" min="5" max="100" step="1" value="25" inputmode="numeric"></div>
+        <div class="field"><label for="ag-tp">Take profit (%)</label><input id="ag-tp" name="takeProfitPct" type="number" min="0.6" max="20" step="0.1" value="${val("takeProfitPct", 2)}" inputmode="decimal"></div>
+        <div class="field"><label for="ag-sl">Stop loss (%)</label><input id="ag-sl" name="stopLossPct" type="number" min="0.3" max="5" step="0.1" value="${val("stopLossPct", 1.2)}" inputmode="decimal"><span class="hint">Every trade has one, up to 5%</span></div>
+        <div class="field"><label for="ag-size">Per trade (% of your USDC)</label><input id="ag-size" name="sizePct" type="number" min="5" max="100" step="1" value="${val("sizePct", 50)}" inputmode="numeric"><span class="hint" data-ag-usd></span></div>
       </div>
       <p class="ticket-preview" data-ag-preview></p>
-      <div class="btn-row sheet-cta"><button class="btn btn-primary btn-block" type="submit">Launch my agent</button></div></form>`;
+      <section class="bt" data-bt aria-live="polite"></section>
+      <div class="btn-row sheet-cta"><button type="button" class="btn btn-ghost" data-bt-run>Test on real prices</button><button class="btn btn-primary" type="submit">${old ? "Save rules" : "Launch my agent"}</button></div></form>`;
   const form = $("[data-agent-form]", sb);
   const read = () => {
     const v = new FormData(form), n = (k) => num(v.get(k));
-    return { name: String(v.get("name") || "").trim(), tagline: String(v.get("tagline") || "").trim(), strategy: v.get("strategy"),
-      fast: Math.round(n("fast")), slow: Math.round(n("slow")), dipPct: n("dipPct"), window: Math.round(n("window")), streak: Math.round(n("streak")),
+    return { name: String(v.get("name") || "").trim(), tagline: String(v.get("tagline") || "").trim(), strategy: v.get("strategy"), token: v.get("token") || "WETH",
+      fast: Math.round(n("fast")), slow: Math.round(n("slow")), dipPct: n("dipPct"), window: Math.round(n("window")), streak: Math.round(n("streak")), trend: Math.round(n("trend")),
       takeProfitPct: n("takeProfitPct"), stopLossPct: n("stopLossPct"), sizePct: n("sizePct") };
   };
+  const body = (v) => {
+    const b = { strategy: v.strategy, token: v.token, takeProfitPct: v.takeProfitPct, stopLossPct: v.stopLossPct, sizePct: v.sizePct };
+    if (v.strategy === "trend") Object.assign(b, { fast: v.fast, slow: v.slow });
+    if (v.strategy === "dip") Object.assign(b, { dipPct: v.dipPct, window: v.window });
+    if (v.strategy === "pullback") Object.assign(b, { dipPct: v.dipPct, window: v.window, trend: v.trend });
+    if (v.strategy === "contrarian") b.streak = v.streak;
+    return b;
+  };
+  const tradeUsd = (v) => Math.max(0, Math.floor((+usdc || 0) * v.sizePct) / 100);
   const draw = () => {
     const v = read();
-    $$("[data-ak]", form).forEach((el) => { el.hidden = el.dataset.ak !== v.strategy; });
-    const when = { trend: `the ${v.fast}-check average crosses above the ${v.slow}-check one`, dip: `price is ${fixed(v.dipPct, 1)}% below its high of the last ${v.window} checks`,
-      contrarian: `price falls ${v.streak} checks in a row` }[v.strategy] || "";
-    $("[data-ag-preview]", form).textContent = `Buys ${fixed(v.sizePct, 0)}% of your USDC when ${when}. Sells at +${fixed(v.takeProfitPct, 1)}% or −${fixed(v.stopLossPct, 1)}%.`;
+    $$("[data-ak]", form).forEach((el) => { el.hidden = !el.dataset.ak.split(" ").includes(v.strategy); });
+    $("[data-ag-usd]", form).textContent = usdc > 0 ? `About ${usd(tradeUsd(v))} a trade now` : "";
+    $("[data-ag-preview]", form).textContent = `Buys ${v.token} with ${fixed(v.sizePct, 0)}% of your USDC when ${agentWhen({ ...v, kind: v.strategy })}. Sells at +${fixed(v.takeProfitPct, 1)}% or −${fixed(v.stopLossPct, 1)}%.`;
   };
   form.addEventListener("input", draw); form.addEventListener("change", draw); draw();
+  $("[data-bt-run]", form).addEventListener("click", async (e) => {
+    const v = read(), box = $("[data-bt]", form);
+    const done = busy(e.currentTarget, "Testing…");
+    box.innerHTML = `<div class="skel skel-row"></div>`;
+    try {
+      const size = tradeUsd(v) >= 1 ? tradeUsd(v) : 5;
+      const r = await api("/v1/backtest", { method: "POST", body: { ...body(v), sizeUsd: size }, timeout: 60000 });
+      box.innerHTML = backtestHTML(r);
+    } catch (err) { box.innerHTML = `<p class="alert">${esc(err.message)}</p>`; } finally { done(); }
+  });
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const v = read();
     if (v.name.length < 3) { toast("Give your agent a name (3-24 characters).", "err"); $("#ag-name", form).focus(); return; }
-    const body = { name: v.name, tagline: v.tagline, strategy: v.strategy, takeProfitPct: v.takeProfitPct, stopLossPct: v.stopLossPct, sizePct: v.sizePct };
-    if (v.strategy === "trend") Object.assign(body, { fast: v.fast, slow: v.slow });
-    if (v.strategy === "dip") Object.assign(body, { dipPct: v.dipPct, window: v.window });
-    if (v.strategy === "contrarian") body.streak = v.streak;
-    const done = busy($("button[type=submit]", form), "Launching…");
+    const done = busy($("button[type=submit]", form), old ? "Saving…" : "Launching…");
     try {
-      const r = await api("/v1/me/agent", { method: "POST", me: true, body });
+      const r = await api(old ? "/v1/me/agent/edit" : "/v1/me/agent", { method: "POST", me: true, body: { name: v.name, tagline: v.tagline, ...body(v) } });
       sheetClose(sheet);
-      state.board = null; // the leaderboard now has one more agent
-      toast(`${r.agent?.name || "Your agent"} is live on the leaderboard`, "ok");
+      state.board = null; // names and rules show on the leaderboard
+      toast(old ? "New rules saved. They apply from its next decision." : `${r.agent?.name || "Your agent"} is live on the leaderboard`, "ok");
       after?.();
     } catch (err) { toast(err.message, "err"); } finally { done(); }
   });
+}
+
+// Backtest result: the price line with where it would have bought and sold.
+function backtestHTML(r) {
+  const trades = r.trades || [], closed = (r.wins || 0) + (r.losses || 0);
+  const W = 640, H = 170, P = 6, px = r.prices || [];
+  let chart = "";
+  if (px.length > 1) {
+    const lo = Math.min(...px), hi = Math.max(...px), span = hi - lo || 1;
+    const X = (i) => P + (i / (px.length - 1)) * (W - 2 * P), Y = (v) => H - P - ((v - lo) / span) * (H - 2 * P);
+    const step = Math.max(1, Math.floor(px.length / 320));
+    let d = "";
+    for (let i = 0; i < px.length; i += step) d += `${d ? "L" : "M"}${X(i).toFixed(1)} ${Y(px[i]).toFixed(1)}`;
+    d += `L${X(px.length - 1).toFixed(1)} ${Y(px.at(-1)).toFixed(1)}`;
+    const marks = trades.map((t) => `<circle class="bt-in" cx="${X(t.in).toFixed(1)}" cy="${Y(t.entry).toFixed(1)}" r="4"/>` +
+      (t.out >= 0 ? `<line class="bt-hold" x1="${X(t.in).toFixed(1)}" y1="${Y(t.entry).toFixed(1)}" x2="${X(t.out).toFixed(1)}" y2="${Y(t.exit).toFixed(1)}"/><circle class="${t.pnlUsd > 0 ? "bt-win" : "bt-loss"}" cx="${X(t.out).toFixed(1)}" cy="${Y(t.exit).toFixed(1)}" r="4"/>` : "")).join("");
+    chart = `<svg class="bt-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Price over the last ${esc(fixed(r.hours, 1))} hours with simulated trades"><path class="line" d="${d}"/>${marks}</svg>
+      <div class="chart-axis num"><span>${esc(fixed(r.hours, 1))} h ago · ${esc(price(px[0]))}</span><span>now · ${esc(price(px.at(-1)))}</span></div>`;
+  }
+  const verdict = closed === 0 && !r.open ? "No trades: its rules never fired in this period."
+    : closed === 0 ? "One trade, still open: the market did not reach its take profit or stop loss."
+    : r.netUsd > 0 ? `Made ${usd(r.netUsd, 3)} after Flash's costs.` : `Lost ${usd(-r.netUsd, 3)} after Flash's costs.`;
+  return `<p class="glabel">Test on the last ${esc(fixed(r.hours, 1))} hours of real ${esc(r.token)} prices</p>
+    <p class="bt-verdict ${r.netUsd > 0 ? "up" : r.netUsd < 0 ? "down" : ""}">${esc(verdict)}</p>
+    ${chart}
+    <dl class="statline bt-stats">
+      <div class="stat"><dt>Trades</dt><dd class="num">${esc(trades.length)}</dd></div>
+      <div class="stat"><dt>Wins / losses</dt><dd class="num">${esc(r.wins || 0)} / ${esc(r.losses || 0)}</dd></div>
+      <div class="stat"><dt>After costs</dt><dd class="num">${pnlHTML(r.netUsd)}</dd></div>
+      <div class="stat"><dt>Costs paid</dt><dd class="num">${esc(usd(r.costUsd, 3))}</dd></div>
+    </dl>
+    <p class="footnote">Size ${esc(usd(r.sizeUsd))} a trade · Flash cost ${esc(usd(r.costPerOrderUsd, 3))} an order (${esc(r.costSource)}) · prices: ${esc(r.priceSource)} · holding ${esc(r.token)} the whole time: ${esc(pct(r.holdPct, 2))}. Past prices are a rough guide, not a promise.</p>`;
 }
 
 function depositSheet(d, after) {
@@ -3059,9 +3236,9 @@ function depositSheet(d, after) {
   });
 }
 
-function investSheet(d, after, pick) {
+function investSheet(d, after, pick, mode) {
   const rows = (state.board?.rows || []).filter((r) => r.agentId !== d.account?.id);
-  const f = pick ? { ...((d.account?.follows || [])[0] || {}), agentId: pick } : (d.account?.follows || [])[0];
+  const f = pick ? { ...((d.account?.follows || [])[0] || {}), agentId: pick, ...(mode ? { mode } : {}) } : (d.account?.follows || [])[0];
   const maxPos = +d.maxPositionPct || 25, maxTrade = +d.maxTradeUsd || 5;
   const sb = openSheet("Pick an agent", { wide: true });
   sb.innerHTML = `<form class="sheet-body" data-inv novalidate>
@@ -3183,9 +3360,10 @@ const routes = [
   [/^#\/plans\/new$/, "plans", pagePlanNew, "New plan · Agent Arena"],
   [/^#\/plan\/([\w-]+)$/, "plans", pagePlan, "Plan · Agent Arena"],
   [/^#\/feed$/, "feed", pageFeed, "Live feed · Agent Arena"],
-  [/^#\/approvals$/, "approvals", pageApprovals, "Approvals · Agent Arena"],
-  [/^#\/wallets$/, "wallets", pageWallets, "Wallets · Agent Arena"],
-  [/^#\/operator$/, "operator", pageOperator, "Operator · Agent Arena"],
+  // Admin (operator) pages: not in any menu; open #/admin directly.
+  [/^#\/(?:admin\/approvals|approvals)$/, "admin", pageApprovals, "Approvals · Admin · Agent Arena"],
+  [/^#\/(?:admin\/wallets|wallets)$/, "admin", pageWallets, "Wallets · Admin · Agent Arena"],
+  [/^#\/(?:admin|operator)$/, "admin", pageOperator, "Admin · Agent Arena"],
 ];
 let current = null, renderSeq = 0;
 
@@ -3234,7 +3412,7 @@ $("[data-resume]").addEventListener("click", async (e) => {
   try { await api("/v1/admin/resume", { method: "POST", admin: true }); toast("Trading resumed", "ok"); } catch (err) { toast(err.message, "err"); }
   btn.disabled = false;
   await refreshStats();
-  if (location.hash === "#/operator") route();
+  if (/^#\/(admin|operator)/.test(location.hash)) route();
 });
 document.addEventListener("click", (e) => {
   const r = e.target.closest("[data-retry]");

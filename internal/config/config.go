@@ -427,6 +427,15 @@ func (c *Config) TokenBySymbol(sym string) (Token, bool) {
 	return Token{}, false
 }
 
+// TokenSymbols lists the tradeable coins.
+func (c *Config) TokenSymbols() []string {
+	out := make([]string, 0, len(c.Tokens))
+	for _, t := range c.Tokens {
+		out = append(out, t.Symbol)
+	}
+	return out
+}
+
 // TokenByAddress finds a tradeable token by contract address.
 func (c *Config) TokenByAddress(addr string) (Token, bool) {
 	for _, t := range c.Tokens {

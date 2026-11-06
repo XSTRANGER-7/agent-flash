@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/big"
 	"strings"
+	"time"
 
 	"github.com/vikram/agent-arena/internal/evm"
 )
@@ -143,6 +144,81 @@ func PriceFromSqrtX96(sqrtX96 *big.Int, wethIsToken0 bool, decWETH, decUSDC int)
 		return 0, errors.New("pool price out of range")
 	}
 	return px, nil
+}
+
+var selObserve = []byte{0x88, 0x3b, 0xdb, 0xfd} // observe(uint32[])
+
+// pad32 encodes a non-negative number as one 32-byte ABI word.
+func pad32(v int64) []byte {
+	b := make([]byte, 32)
+	new(big.Int).SetInt64(v).FillBytes(b)
+	return b
+}
+
+// History reads past prices from the pool's own oracle (observe): n average
+// prices, one per step, oldest first, ending now. The pool only remembers a
+// few hours (its observation buffer); when n*step reaches past that, it asks
+// for fewer points. Each price is the average over its step (time-weighted,
+// so one odd trade inside a block does not move it).
+func (p *Pool) History(ctx context.Context, n int, step time.Duration) ([]float64, error) {
+	if !p.verified {
+		return nil, errors.New("pool not verified")
+	}
+	sec := int64(step / time.Second)
+	if sec <= 0 || n < 2 {
+		return nil, errors.New("history: bad step or size")
+	}
+	var lastErr error
+	for ; n >= 20; n = n * 3 / 4 {
+		data := append([]byte{}, selObserve...)
+		data = append(data, pad32(32)...)
+		data = append(data, pad32(int64(n+1))...)
+		for i := n; i >= 0; i-- {
+			data = append(data, pad32(int64(i)*sec)...)
+		}
+		r, err := p.rpc.Call(ctx, p.Address, data)
+		if err != nil {
+			lastErr = err // "OLD": asked further back than the pool remembers
+			continue
+		}
+		off, err := word(r, 0)
+		if err != nil {
+			return nil, err
+		}
+		o := int(new(big.Int).SetBytes(off).Int64())
+		if o+32 > len(r) || int(new(big.Int).SetBytes(r[o:o+32]).Int64()) != n+1 || o+32*(n+2) > len(r) {
+			return nil, errors.New("history: malformed observe result")
+		}
+		ticks := make([]*big.Int, n+1)
+		for i := 0; i <= n; i++ {
+			w := r[o+32*(i+1) : o+32*(i+2)]
+			v := new(big.Int).SetBytes(w)
+			if w[0]&0x80 != 0 { // int56 sign-extended to 256 bits
+				v.Sub(v, new(big.Int).Lsh(big.NewInt(1), 256))
+			}
+			ticks[i] = v
+		}
+		out := make([]float64, 0, n)
+		for i := 0; i < n; i++ {
+			d := new(big.Int).Sub(ticks[i+1], ticks[i])
+			tick, _ := new(big.Float).Quo(new(big.Float).SetInt(d), big.NewFloat(float64(sec))).Float64()
+			px := math.Pow(1.0001, tick) // raw token1 per raw token0
+			if p.wethIsToken0 {
+				px *= math.Pow10(p.decWETH - p.decUSDC)
+			} else {
+				px = 1 / (px * math.Pow10(p.decUSDC-p.decWETH))
+			}
+			if px <= 0 || math.IsInf(px, 0) || math.IsNaN(px) {
+				return nil, errors.New("history: price out of range")
+			}
+			out = append(out, px)
+		}
+		return out, nil
+	}
+	if lastErr == nil {
+		lastErr = errors.New("history: too few points")
+	}
+	return nil, fmt.Errorf("pool history: %w", lastErr)
 }
 
 // TVL is the USD value held by the pool (USDC + WETH at price).

@@ -85,6 +85,38 @@ func (c Contrarian) Decide(p []float64) *Signal {
 	return &Signal{TPPct: 1.5, SLPct: 1.5, SizePct: 15, Reason: fmt.Sprintf("%d red ticks in a row. Everyone is selling, so I'm buying a small bounce.", c.Streak)}
 }
 
+// Pullback buys a dip only while the longer trend is rising: price is DipPct
+// below its recent high AND the long average is higher than it was a quarter
+// of its length ago. A fall through the long average is a breakdown, not a
+// dip, and is skipped. Fewer, better-placed trades than buying every drop.
+type Pullback struct {
+	Window int     // recent high over this many checks
+	DipPct float64 // how far below that high
+	Trend  int     // long average length (checks)
+}
+
+func (Pullback) Name() string { return "pullback" }
+func (b Pullback) Decide(p []float64) *Signal {
+	lag := max(1, b.Trend/4)
+	if len(p) < max(b.Window, b.Trend+lag) {
+		return nil
+	}
+	hi := 0.0
+	for _, x := range p[len(p)-b.Window:] {
+		hi = math.Max(hi, x)
+	}
+	last := p[len(p)-1]
+	drop := (hi - last) / hi * 100
+	if drop < b.DipPct {
+		return nil
+	}
+	long, before := sma(p, b.Trend), sma(p[:len(p)-lag], b.Trend)
+	if long <= before || last < long*(1-b.DipPct/100) {
+		return nil // trend not rising, or price broke down through it
+	}
+	return &Signal{TPPct: 2, SLPct: 1.2, SizePct: 20, Reason: fmt.Sprintf("Uptrend (%d-check average rising) and a %.2f%% pullback from the recent high. Buying the dip inside the trend.", b.Trend, drop)}
+}
+
 // Profile is the public face of an agent.
 type Profile struct {
 	ID       string   `json:"id"`
@@ -97,6 +129,8 @@ type Profile struct {
 	// creator's own address.
 	Community bool   `json:"community,omitempty"`
 	Owner     string `json:"owner,omitempty"`
+	// Token is the coin it trades (symbol); empty = the arena's trade asset.
+	Token string `json:"token,omitempty"`
 }
 
 // Tuned runs a strategy with a person's own take profit, stop loss and size
@@ -129,9 +163,10 @@ func (t Tuned) Decide(p []float64) *Signal {
 // StrategyParams is what a person can tune when they make an agent. Zero
 // values take the built-in agent's defaults.
 type StrategyParams struct {
-	Kind                  string // trend | dip | contrarian
+	Kind                  string // trend | dip | contrarian | pullback
 	Fast, Slow            int    // trend: moving-average lengths (price checks)
-	Window                int    // dip: how far back the recent high is looked for
+	Window                int    // dip, pullback: how far back the recent high is looked for
+	Trend                 int    // pullback: long average that must be rising (checks)
 	DipPct                float64
 	Streak                int // contrarian: falling checks in a row
 	TPPct, SLPct, SizePct float64
@@ -173,8 +208,23 @@ func BuildStrategy(p StrategyParams) (Strategy, StrategyParams, error) {
 			return nil, p, fmt.Errorf("contrarian: 2-20 falling checks in a row")
 		}
 		inner = Contrarian{Streak: p.Streak}
+	case "pullback":
+		if p.Window == 0 {
+			p.Window = 40
+		}
+		if p.DipPct == 0 {
+			p.DipPct = 0.5
+		}
+		if p.Trend == 0 {
+			p.Trend = 120
+		}
+		// The price feed keeps 500 checks: trend + trend/4 must fit in it.
+		if !in(float64(p.Window), 5, 240) || !in(p.DipPct, 0.1, 10) || !in(float64(p.Trend), 20, 360) {
+			return nil, p, fmt.Errorf("pullback: look back 5-240 checks, drop 0.1%%-10%%, trend 20-360 checks")
+		}
+		inner = Pullback{Window: p.Window, DipPct: p.DipPct, Trend: p.Trend}
 	default:
-		return nil, p, fmt.Errorf("strategy must be trend, dip or contrarian")
+		return nil, p, fmt.Errorf("strategy must be trend, dip, contrarian or pullback")
 	}
 	switch {
 	case !in(p.TPPct, 0.6, 20):
