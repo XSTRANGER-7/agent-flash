@@ -814,6 +814,7 @@ function wireHow(scope) {
 }
 
 async function pageHome(page) {
+  page.classList.add("home");
   page.innerHTML = `
   <section class="hero hero-ios">
     <div class="hero-copy">
@@ -892,7 +893,7 @@ async function pageHome(page) {
     <div class="btn-row"><a class="btn btn-primary" href="#/me">Open my wallet</a><a class="btn btn-ghost" href="#/docs">Read the docs</a></div>
   </section>
 
-  <section class="section auto-teaser" data-auto>
+  <section class="section auto-teaser" data-auto hidden>
     <div class="section-head"><h2>Auto-traders</h2><a class="btn btn-primary btn-sm" href="#/plans/new">Create</a></div>
     <div class="plan-grid plan-grid-sm" data-auto-list></div>
   </section>
@@ -1068,6 +1069,7 @@ async function pageHome(page) {
   const renderAuto = async () => {
     let plans = [];
     try { plans = (await api("/v1/plans")).plans || []; } catch { autoEl.innerHTML = ""; return; }
+    $("[data-auto]", page).hidden = !plans.length; // no empty "Auto-traders" heading
     const html = plans.slice(0, 3).map((p) => planCard(p, true)).join("");
     if (autoEl.dataset.sig !== html) { autoEl.dataset.sig = html; autoEl.innerHTML = html; }
   };

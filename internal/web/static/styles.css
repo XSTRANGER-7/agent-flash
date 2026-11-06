@@ -1645,6 +1645,49 @@ a.chip::after { content: ""; position: absolute; inset: -8px -4px; }
 @media (max-width: 860px) { .install { left: 12px; right: 12px; width: auto; bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 22px); } }
 @media (prefers-reduced-motion: reduce) { .install { animation: none; } }
 
+/* ---------- home: room to breathe ---------- */
+.home .section { margin-top: clamp(80px, 8vw, 128px); }
+.home .section:has(> .kpis) { margin-top: var(--s6); }
+.home .section-head { margin-bottom: clamp(20px, 2.4vw, 32px); }
+.home .section-head h2, .home .share-copy h2 { font-size: clamp(26px, 3vw, 38px); font-weight: 800; line-height: 1.12; letter-spacing: -.025em; }
+.home .section-head .eyebrow, .home .share-copy .eyebrow, .home .auto-copy .eyebrow { margin-bottom: 10px; color: var(--signal); }
+.home .why-grid, .home .gl-flow { gap: var(--s4); }
+.home .why { gap: 12px; padding: clamp(24px, 2.4vw, 32px); }
+.home .why h3 { font-size: 20px; }
+.home .why p, .home .gl-node > span:last-child, .home .sec-list span, .home .auto-list span, .home .ticks li { font-size: 15px; line-height: 1.6; }
+.home .gl-node { gap: 8px; padding: clamp(22px, 2.2vw, 30px); }
+.home .gl-proof { margin-top: var(--s5); padding: var(--s5) var(--s6); }
+.home .sec-grid { gap: var(--s6); }
+.home .sec-list { gap: var(--s3); }
+.home .sec-list li { padding: 18px 20px; }
+.home .auto-show, .home .share-band { gap: clamp(32px, 5vw, 72px); }
+.home .auto-list { gap: var(--s4); margin: var(--s5) 0 var(--s6); }
+.home .ticks { gap: 14px; margin: var(--s4) 0 var(--s5); }
+.home .faq { gap: var(--s3); }
+.home .faq-item summary { padding: 18px 20px; }
+.home .faq-item p { padding: 0 20px 20px; }
+.home .cta-band { padding: clamp(28px, 4vw, 48px); }
+@media (max-width: 760px) {
+  .home .section { margin-top: 72px; }
+  .home .section:has(> .kpis) { margin-top: var(--s5); }
+  .home .section-head h2, .home .share-copy h2, .home .auto-copy h2 { font-size: 26px; }
+  /* gasless: three calm rows in one card instead of three big boxes */
+  .home .gl-flow { gap: 0; padding: 4px 20px; border-radius: 24px; background: var(--pine); border: 1px solid var(--hair); }
+  .home .gl-node { grid-template-columns: 44px minmax(0, 1fr); column-gap: 14px; row-gap: 2px; padding: 16px 0; background: none; border: 0; border-radius: 0; }
+  .home .gl-node + .gl-arrow + .gl-node { border-top: 1px solid var(--hair); }
+  .home .gl-ico { grid-row: span 2; width: 44px; height: 44px; margin: 0; }
+  .home .gl-arrow { display: none; }
+  /* sub-wallet guarantees: one clean list */
+  .home .sec-list { grid-template-columns: 1fr; gap: 0; padding: 4px 20px; border-radius: 24px; background: var(--pine); border: 1px solid var(--hair); }
+  .home .sec-list li { padding: 14px 0; background: none; border: 0; border-radius: 0; }
+  .home .sec-list li + li { border-top: 1px solid var(--hair); }
+  /* why: the icon beside the text */
+  .home .why { grid-template-columns: 46px minmax(0, 1fr); column-gap: 16px; padding: 20px; }
+  .home .why > * { grid-column: 2; }
+  .home .why-ico { grid-column: 1; grid-row: 1 / span 3; }
+  .home .why h3 { font-size: 18px; }
+}
+
 /* ---------- accessibility fixes (QA, Nov 7) ---------- */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .empty > p { margin: 0; max-width: 46ch; }
