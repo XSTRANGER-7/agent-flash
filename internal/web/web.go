@@ -42,8 +42,11 @@ func Handler() http.Handler {
 		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		h.Set("X-Frame-Options", "DENY")
 		switch {
-		case p == "/" || p == "/index.html" || p == "/sw.js" || p == "/manifest.webmanifest":
-			h.Set("Cache-Control", "no-cache") // SW and shell must update promptly
+		case p == "/" || p == "/index.html" || p == "/sw.js" || p == "/manifest.webmanifest" ||
+			strings.HasSuffix(p, ".js") || strings.HasSuffix(p, ".css"):
+			// The shell is not fingerprinted: browsers must check for a new copy
+			// every time, or a fix can sit unseen in their cache for an hour.
+			h.Set("Cache-Control", "no-cache")
 		case strings.HasPrefix(p, "/fonts/"):
 			h.Set("Cache-Control", "public, max-age=31536000, immutable") // a font file never changes in place
 		default:

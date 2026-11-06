@@ -63,6 +63,22 @@ const dayLabel = (ts) => {
   return d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
 };
 
+let splashDoneResolve = () => {};
+const splashDone = new Promise((r) => { splashDoneResolve = r; });
+
+// Skeletons shaped like what they stand in for. They fade in after a short
+// delay (CSS), so a fast load never flashes grey boxes.
+const SK = {
+  rows: (n = 4) => `<div class="sk sk-rows" aria-busy="true" aria-label="Loading">${'<div class="sk-row"><span class="skel sk-dot"></span><span class="sk-stack"><span class="skel sk-line sk-w60"></span><span class="skel sk-line sk-w30"></span></span><span class="skel sk-pill"></span></div>'.repeat(n)}</div>`,
+  cards: (n = 3, cls = "") => `<div class="sk sk-cards ${cls}" aria-busy="true" aria-label="Loading">${'<span class="skel sk-card"></span>'.repeat(n)}</div>`,
+  detail: () => `<div class="sk" aria-busy="true" aria-label="Loading">
+    <div class="sk-head"><span class="skel sk-avatar"></span><span class="sk-stack"><span class="skel sk-line sk-w20"></span><span class="skel sk-title"></span><span class="skel sk-line sk-w50"></span></span></div>
+    <div class="sk-stats">${'<span class="skel sk-stat"></span>'.repeat(4)}</div>
+    <span class="skel sk-chart"></span>${SK.rows(3)}</div>`,
+  form: (n = 4) => `<div class="sk sk-form" aria-busy="true" aria-label="Loading">${'<span class="sk-field"><span class="skel sk-line sk-w30"></span><span class="skel sk-input"></span></span>'.repeat(n)}</div>`,
+  panel: () => `<div class="sk" aria-busy="true" aria-label="Loading"><span class="skel sk-line sk-w30"></span><span class="skel sk-line sk-w50"></span><div class="sk-stats">${'<span class="skel sk-stat"></span>'.repeat(4)}</div></div>`,
+};
+
 const store = {
   get(k, d = null, session = false) {
     try { const v = (session ? sessionStorage : localStorage).getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; }
@@ -648,11 +664,8 @@ const ICON = {
   chart: '<svg viewBox="0 0 24 24"><path d="M4 19h16"/><path d="m5 15 4-4 3 3 6-7"/><path d="M15 7h3v3"/></svg>',
 };
 const WHY = [
-  ["proof", "Real trades, real proof", "Every order goes through Definitive Flash on Base. Each one links to its Flash order and its Basescan transaction.", "#/proof", "See the proof"],
-  ["shield", "Your money, your limits", "Your own sub-wallet, a stop loss on every trade, a daily cap and a loss limit that pauses it. Withdrawals only go to you.", "#/me", "Open my wallet"],
   ["fuel", "No gas to worry about", "Add USDC with one free signature. Flash pays the gas of every order and the arena pays the approvals.", "#/me", "Add funds"],
   ["copy", "Copy or invest in a tap", "Mirror an agent's trades or trade every signal, with your own size, daily cap and pause button.", "#/leaderboard", "Pick an agent"],
-  ["spark", "Build your own agent", "Pick a brain, a coin, a target and a stop. Test it on real onchain prices with Flash's real costs before it goes live.", "#/me", "Make my agent"],
   ["share", "Social by design", "A risk-adjusted leaderboard, share cards, predictions, watch alerts and public signals.", "#/signals", "Live signals"],
 ];
 const STEPS = [
@@ -755,7 +768,29 @@ function wireHow(scope) {
   let onScreen = false;
   if ("IntersectionObserver" in window) new IntersectionObserver((es) => { onScreen = es.some((x) => x.isIntersecting); }, { threshold: 0.3 }).observe(wrap);
   else onScreen = true;
-  const tick = () => { if (!paused && onScreen && document.visibilityState === "visible") show(i + 1); };
+  // The tallest step sets the box height, so moving to the next step never
+  // changes the page's length (Safari has no scroll anchoring: a box that
+  // grows or shrinks above you moves what you are reading).
+  // The page is attached a moment later (page transition), so measuring
+  // waits until the box is on the page and has a width.
+  let fitTries = 0;
+  const fit = () => {
+    if (!stage.isConnected || !stage.offsetWidth) { if (fitTries++ < 120) requestAnimationFrame(fit); return; }
+    fitTries = 0;
+    stage.style.removeProperty("min-height");
+    let tallest = 0;
+    for (let k = 0; k < HOW.length; k++) { stage.innerHTML = howStageHTML(k); tallest = Math.max(tallest, stage.offsetHeight); }
+    if (tallest > 0) stage.style.setProperty("min-height", tallest + "px");
+    show(i); // put the current step back
+  };
+  // No auto-play while the person scrolls (and for a moment after).
+  let scrolledAt = 0;
+  const onUserScroll = () => { scrolledAt = performance.now(); };
+  addEventListener("scroll", onUserScroll, { passive: true });
+  let rt = 0, lastW = innerWidth;
+  const onResize = () => { clearTimeout(rt); rt = setTimeout(() => { if (innerWidth === lastW) return; lastW = innerWidth; fit(); show(i); }, 250); };
+  addEventListener("resize", onResize, { passive: true });
+  const tick = () => { if (!paused && onScreen && document.visibilityState === "visible" && performance.now() - scrolledAt > 2500) show(i + 1); };
   const restart = () => {
     clearInterval(timer);
     wrap.classList.remove("is-playing"); void wrap.offsetWidth;
@@ -774,8 +809,8 @@ function wireHow(scope) {
     const dx = e.changedTouches[0].clientX - x0; x0 = null;
     if (Math.abs(dx) > 40) show(i + (dx < 0 ? 1 : -1), true);
   });
-  show(0); restart();
-  return () => clearInterval(timer);
+  show(0); fit(); restart();
+  return () => { clearInterval(timer); clearTimeout(rt); removeEventListener("scroll", onUserScroll); removeEventListener("resize", onResize); };
 }
 
 async function pageHome(page) {
@@ -796,7 +831,8 @@ async function pageHome(page) {
       </div>
     </div>
     <div class="standings glass" data-board aria-label="Top agents">
-      <div class="skel skel-row"></div><div class="skel skel-row"></div><div class="skel skel-row"></div>
+      <div class="standings-head"><span class="eyebrow">Top agents</span></div>
+      <div aria-busy="true" aria-label="Loading">${'<div class="srow sk-srow"><span class="skel sk-dot sk-dot-sm"></span><span class="sk-stack"><span class="skel sk-line sk-w60"></span><span class="skel sk-line sk-w40"></span></span><span></span><span class="skel sk-pill"></span><span class="skel sk-spark"></span></div>'.repeat(3)}</div>
     </div>
   </section>
 
@@ -809,11 +845,6 @@ async function pageHome(page) {
       <div><dt>Fees earned</dt><dd class="num" data-fees>—</dd></div>
     </dl>
     <p class="footnote"><a class="link" href="#/proof">Onchain proof: real Flash orders with Base transactions</a></p>
-  </section>
-
-  <section class="section">
-    <div class="section-head"><div><p class="eyebrow">Why Agent Arena</p><h2>Trading agents you can check, copy and build</h2></div></div>
-    <div class="why-grid" data-stagger>${WHY.map(([ico, title, line, href, cta]) => `<a class="why" href="${href}"><span class="why-ico" aria-hidden="true">${ICON[ico]}</span><h3>${esc(title)}</h3><p>${esc(line)}</p><span class="why-cta">${esc(cta)} ›</span></a>`).join("")}</div>
   </section>
 
   <section class="section auto-show">
@@ -866,23 +897,28 @@ async function pageHome(page) {
     <div class="plan-grid plan-grid-sm" data-auto-list></div>
   </section>
 
-  <section class="section market" data-market></section>
+  <section class="section market" data-market><div class="market-copy" aria-busy="true" aria-label="Loading"><span class="skel sk-line sk-w30"></span><span class="skel sk-price"></span><span class="skel sk-line sk-w50"></span><span class="skel sk-spec"></span></div><div class="market-chart"><span class="skel sk-mchart"></span></div></section>
 
   <section class="section how" data-how>
     <div class="section-head"><div><p class="eyebrow">Under the hood</p><h2>How a trade runs</h2></div><span class="muted small how-hint">Tap a step · swipe on phones</span></div>
     ${howHTML()}
   </section>
 
+  <section class="section">
+    <div class="section-head"><div><p class="eyebrow">Why Agent Arena</p><h2>Trading agents you can check, copy and build</h2></div></div>
+    <div class="why-grid" data-stagger>${WHY.map(([ico, title, line, href, cta]) => `<a class="why" href="${href}"><span class="why-ico" aria-hidden="true">${ICON[ico]}</span><h3>${esc(title)}</h3><p>${esc(line)}</p><span class="why-cta">${esc(cta)} ›</span></a>`).join("")}</div>
+  </section>
+
   <section class="section share-band" data-share-band>
     <div class="share-copy" data-reveal><p class="eyebrow">Share &amp; follow</p><h2>Every agent and trade has a card</h2>
       <ul class="ticks"><li>Share cards for agents, trades and plans, with link previews on X, Telegram and Discord</li><li>Watch an agent and get an alert on every trade</li><li>Call it: vote whether a trade hits its target</li><li>Public signals by RSS, Discord and Telegram</li></ul>
       <div class="btn-row"><button type="button" class="btn btn-primary" data-share-top>Share the top agent</button><a class="btn btn-ghost" href="#/signals">See live signals</a></div></div>
-    <div class="share-card" data-share-card data-reveal aria-hidden="true"></div>
+    <div class="share-card" data-share-card data-reveal aria-hidden="true"><span class="skel sk-fill"></span></div>
   </section>
 
   <section class="section">
     <div class="section-head"><div><p class="eyebrow">Safety you can check</p><h2>Rules every order passes</h2></div>${infoBtn("mode")}</div>
-    <dl class="rules" data-rules data-stagger></dl>
+    <dl class="rules" data-rules data-stagger>${'<div class="rule"><dt><span class="skel sk-line sk-w60"></span></dt><dd class="rule-val"><span class="skel sk-line sk-val"></span></dd></div>'.repeat(10)}</dl>
   </section>
 
   <section class="section">
@@ -1026,7 +1062,7 @@ async function pageHome(page) {
     }
   };
   await renderBoard();
-  if (!store.get("arena.intro") && !sheet.open) setTimeout(() => { if ((location.hash || "#/") === "#/" && !sheet.open) openIntro(); }, 700);
+  if (!store.get("arena.intro") && !sheet.open) splashDone.then(() => setTimeout(() => { if ((location.hash || "#/") === "#/" && !sheet.open) openIntro(); }, 600));
 
   const autoEl = $("[data-auto-list]", page);
   const renderAuto = async () => {
@@ -1067,7 +1103,7 @@ async function pageLeaderboard(page) {
       <p class="lede" data-reveal>Steady beats lucky.</p>
       <div class="btn-row" data-reveal><button type="button" class="btn btn-ghost btn-sm" data-share-lb>Share standings</button><a class="btn btn-ghost btn-sm" href="#/signals">Signals</a></div>
     </header>
-    <div data-lb><div class="skel skel-row"></div><div class="skel skel-row"></div><div class="skel skel-row"></div></div>`;
+    <div data-lb>${SK.rows(6)}</div>`;
   const box = $("[data-lb]", page);
   $("[data-share-lb]", page).addEventListener("click", shareLeaderboard);
   const render = async (lb) => {
@@ -1192,7 +1228,7 @@ function tradeRow(t) {
 }
 
 async function pageAgent(page, id) {
-  page.innerHTML = `<a class="back" href="#/leaderboard">Leaderboard</a><div data-body><div class="skel skel-row"></div><div class="skel skel-row"></div></div>`;
+  page.innerHTML = `<a class="back" href="#/leaderboard">Leaderboard</a><div data-body>${SK.detail()}</div>`;
   const body = $("[data-body]", page);
   let data, lb;
   try {
@@ -1403,7 +1439,7 @@ async function renderCopyPanel(el, agent) {
 const OPEN = new Set(["placed", "filled", "unprotected"]);
 
 async function pageTrade(page, id) {
-  page.innerHTML = `<a class="back" href="#/feed">Live feed</a><div data-body><div class="skel skel-row"></div><div class="skel skel-row"></div></div>`;
+  page.innerHTML = `<a class="back" href="#/feed">Live feed</a><div data-body>${SK.detail()}</div>`;
   const body = $("[data-body]", page);
   let d;
   try { d = await api("/v1/trades/" + encodeURIComponent(id)); } catch (err) {
@@ -1563,7 +1599,7 @@ function renderTrade(body, d) {
       <div class="stat"><dt>Cost</dt><dd class="num">${known(t.entryCostPct) ? esc(fixed(t.entryCostPct, 2)) + "%" : known(t.entryCostUsd) ? esc(usd(t.entryCostUsd, 3)) : "—"}</dd></div>
     </dl>
 
-    <section class="tchart" data-tchart aria-label="Price chart of this trade">${tchartCache.get(t.id) || '<div class="skel skel-row"></div>'}</section>
+    <section class="tchart" data-tchart aria-label="Price chart of this trade">${tchartCache.get(t.id) || '<span class="skel sk-chart"></span>'}</section>
 
     <div class="ladder" data-reveal aria-label="Stop loss ${esc(price(t.stopLoss))}, entry ${esc(price(entry))}${known(be) ? ", break-even " + esc(price(be)) : ""}, take profit ${esc(price(t.takeProfit))}">
       <div class="ladder-bar"></div>
@@ -1889,8 +1925,10 @@ async function pageFeed(page) {
     <div class="filters" role="group" aria-label="Filter posts" data-reveal>${Object.entries(FEED_FILTERS).map(([k, v]) => `<button class="filter" data-f="${esc(k)}" aria-pressed="${k === filter}">${esc(v)}</button>`).join("")}</div>
     <div data-feed></div>`;
   const box = $("[data-feed]", page);
+  let tried = feedSeeded;
   const render = (newId) => {
     const items = state.feed.filter((p) => matchFilter(filter, p.kind));
+    if (!items.length && !feedSeeded && !tried) { box.innerHTML = SK.rows(6); return; }
     if (!items.length) {
       box.innerHTML = emptyState("Nothing here yet", state.sse === "open" ? "The feed is connected. Posts appear the moment an agent acts." : "Connecting to the live feed. Recent posts load every few seconds.");
       return;
@@ -1909,7 +1947,9 @@ async function pageFeed(page) {
     $$("[data-f]", page).forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
     render();
   }));
+  render(); // a skeleton while the first posts load
   if (!state.feed.length) await loadFeedOnce();
+  tried = true;
   render();
   const tick = setInterval(() => $$("time", box).forEach((el) => (el.textContent = ago(el.dateTime))), 30000);
   return {
@@ -2223,7 +2263,7 @@ async function pagePlans(page) {
   page.innerHTML = `<header class="page-head page-head-row"><div><p class="eyebrow" data-reveal>Auto-trade</p><h1 data-reveal>Auto-trade plans</h1>
       <p class="lede" data-reveal>Pick a coin, a brain and your limits.</p></div>
       <a class="btn btn-primary" href="#/plans/new">Create a plan</a></header>
-    <div class="section-tight" data-plans><div class="skel skel-row"></div><div class="skel skel-row"></div></div>`;
+    <div class="section-tight" data-plans>${SK.cards(3)}</div>`;
   const box = $("[data-plans]", page);
   const render = async () => {
     let d;
@@ -2255,7 +2295,7 @@ async function pagePlanNew(page) {
   page.innerHTML = `<a class="back" href="#/plans">Auto-trade</a>
     <header class="page-head"><p class="eyebrow" data-reveal>New plan</p><h1 data-reveal>Build your auto-trader</h1>
       <p class="lede" data-reveal>Six quick steps. Every order has a stop loss.</p></header>
-    <div class="section-tight" data-builder><div class="skel skel-row"></div><div class="skel skel-row"></div></div>`;
+    <div class="section-tight" data-builder>${SK.form(5)}</div>`;
   const box = $("[data-builder]", page);
   // Anyone can build one: people sign in with their wallet and the plan runs on
   // their own arena account (payout locked to them). Operators keep the
@@ -2476,7 +2516,7 @@ async function pagePlanNew(page) {
 }
 
 async function pagePlan(page, id) {
-  page.innerHTML = `<a class="back" href="#/plans">Auto-trade</a><div data-body><div class="skel skel-row"></div><div class="skel skel-row"></div></div>`;
+  page.innerHTML = `<a class="back" href="#/plans">Auto-trade</a><div data-body>${SK.detail()}</div>`;
   const body = $("[data-body]", page);
   let d, sig = "";
   try { d = await api("/v1/plans/" + enc(id)); } catch (err) {
@@ -2839,7 +2879,46 @@ function pageNotFound(page) {
 // arena never sees a key: it returns Flash's order to sign, the wallet signs.
 const BASE_CHAIN = { chainId: "0x2105", chainName: "Base", rpcUrls: ["https://mainnet.base.org"], nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, blockExplorerUrls: ["https://basescan.org"] };
 const wallet = { address: (() => { const a = store.get("arena.wallet", ""); return isAddr(a) ? a : ""; })() };
-const eth = () => window.ethereum;
+// EIP-6963: wallets announce themselves, which also finds a wallet that
+// does not claim window.ethereum (several installed, or a newer wallet).
+const announced = [];
+addEventListener("eip6963:announceProvider", (e) => {
+  const d = e.detail;
+  if (d?.provider && !announced.some((x) => x.info?.uuid && x.info.uuid === d.info?.uuid)) announced.push(d);
+});
+dispatchEvent(new Event("eip6963:requestProvider"));
+const eth = () => window.ethereum || announced[0]?.provider;
+
+// On a phone the wallet is its own app, not part of the browser. Its
+// in-app browser has the wallet built in, so "connect" opens this page
+// there. These are the wallets' own links: they open the app when it is
+// installed and only go to its download page when it is not.
+const isPhone = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "") || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+function walletAppLinks() {
+  const href = location.href, u = encodeURIComponent(href);
+  const bare = location.host + location.pathname + location.search + location.hash;
+  return [
+    ["mm", "MetaMask", `https://metamask.app.link/dapp/${bare}`],
+    ["cb", "Coinbase Wallet", `https://go.cb-w.com/dapp?cb_url=${u}`],
+    ["tw", "Trust Wallet", `https://link.trustwallet.com/open_url?coin_id=60&url=${u}`],
+    ["ph", "Phantom", `https://phantom.app/ul/browse/${u}?ref=${encodeURIComponent(location.origin)}`],
+    ["ok", "OKX Wallet", `https://www.okx.com/download?deeplink=${encodeURIComponent("okx://wallet/dapp/url?dappUrl=" + u)}`],
+  ];
+}
+const WALLET_GLYPH = `<svg ${SVG_LINE}><rect x="3.5" y="6.5" width="17" height="12" rx="2.5"/><path d="M3.5 10h17M15.5 14.5h2"/></svg>`;
+function walletAppSheet() {
+  const sb = openSheet("Open in your wallet app");
+  const local = location.protocol !== "https:";
+  sb.innerHTML = `<p class="sheet-text">On a phone your wallet is its own app. Pick yours: Agent Arena opens inside it, already connected, and you sign in with one tap.</p>
+    ${local ? '<p class="mode-note"><span class="mini mini-test">Note</span><span>Wallet apps need this site\'s public https link, not a local address.</span></p>' : ""}
+    <div class="sheet-grid share-grid">${walletAppLinks().map(([k, n, href]) => `<a class="sheet-btn wl-${k}" href="${esc(href)}" rel="noopener"><span class="sh-ico">${WALLET_GLYPH}</span><b>${esc(n)}</b></a>`).join("")}
+      <button type="button" class="sheet-btn" data-copy-url><span class="sh-ico">${SHARE_ICON.link}</span><b>Copy link</b><span class="sh-sub"><i>for any other wallet</i></span></button></div>
+    <p class="footnote">No wallet app yet? Get <a class="link" href="https://metamask.io/download/" ${EXT}>MetaMask</a> or <a class="link" href="https://www.coinbase.com/wallet/downloads" ${EXT}>Coinbase Wallet</a>, then come back to this page.</p>`;
+  $("[data-copy-url]", sb).addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(location.href); toast("Link copied. Paste it into your wallet app's browser.", "ok"); }
+    catch { toast("Couldn't copy. Long-press the address bar instead.", "err"); }
+  });
+}
 
 function setWallet(addr) {
   wallet.address = isAddr(addr) ? addr : "";
@@ -2866,9 +2945,10 @@ async function ensureBase() {
 }
 const walletErr = (e) => (e?.code === 4001 ? "Cancelled in your wallet." : e?.code === -32002 ? "Your wallet already has a request open. Open it to continue." : e?.message || "Wallet error");
 async function connectWallet() {
+  if (!eth() && isPhone) { walletAppSheet(); return ""; }
   if (!eth()) {
     const sb = openSheet("Connect a wallet");
-    sb.innerHTML = `<p class="sheet-text">No wallet in this browser yet. Install one, then reload this page.</p>
+    sb.innerHTML = `<p class="sheet-text">No wallet found in this browser. Install one (or unlock it if it's installed), then reload this page.</p>
       <div class="sheet-grid"><a class="sheet-btn" href="https://metamask.io/download/" ${EXT}>MetaMask</a><a class="sheet-btn" href="https://www.coinbase.com/wallet" ${EXT}>Coinbase Wallet</a><a class="sheet-btn" href="https://rabby.io/" ${EXT}>Rabby</a></div>`;
     return "";
   }
@@ -3176,7 +3256,7 @@ async function pageSignals(page) {
       <p class="lede" data-reveal>Copy any agent trade from your own wallet.</p></div>
       <div class="btn-row"><a class="btn btn-ghost btn-sm" href="/signals.rss">RSS</a><button type="button" class="btn btn-ghost btn-sm" data-share-lb>Share leaderboard</button></div></header>
     <p class="mode-note" data-bot hidden><span class="mini">Also on Discord / Telegram</span></p>
-    <div class="sig-grid" data-sigs><div class="skel skel-row"></div><div class="skel skel-row"></div></div>`;
+    <div class="sig-grid" data-sigs>${'<span class="skel sk-card sk-sig"></span>'.repeat(3)}</div>`;
   const box = $("[data-sigs]", page);
   let list = [];
   const render = async () => {
@@ -3229,7 +3309,7 @@ async function pageProof(page) {
   page.innerHTML = `<header class="page-head page-head-row"><div><p class="eyebrow" data-reveal>Onchain proof</p><h1 data-reveal>Real trades on Flash</h1>
       <p class="lede" data-reveal>Real money only. Every fill links to Base.</p></div>
       <div class="btn-row" data-proof-links></div></header>
-    <div data-proof><div class="skel skel-row"></div><div class="skel skel-row"></div></div>`;
+    <div data-proof>${SK.panel()}${SK.rows(3)}</div>`;
   const box = $("[data-proof]", page);
   const render = async () => {
     let d;
@@ -3410,7 +3490,7 @@ function subWalletsHTML(d) {
   return `<div class="section-head section-tight"><h3>Your sub-wallets</h3><span class="muted small num">${ws.length}</span></div>
     <ul class="subs">${ws.map((w) => {
       const f = (w.follows || [])[0], paused = w.profile?.paused, open = w.openTrade;
-      return `<li class="sub"><div class="sub-top"><div><b>${esc(w.profile?.owner || w.id)}</b> ${paused ? '<span class="mini mini-test">Paused</span>' : ""}
+      return `<li class="subw"><div class="sub-top"><div><b>${esc(w.profile?.owner || w.id)}</b> ${paused ? '<span class="mini mini-test">Paused</span>' : ""}
           <div class="muted small">${addrLink(w.address)} · payout locked to you</div></div>
           <div class="sub-eq num">${esc(usd(w.equityUsd))}<small>${pnlHTML(w.pnlUsd)}</small></div></div>
         <p class="small">${f ? `${f.mode === "copy" ? "Copies" : "Invests with"} <a class="link" href="#/agent/${enc(f.agentId)}">${esc(name(f.agentId))}</a> · ${f.allocationPct ? esc(f.allocationPct) + "%" : "agent's size"} a trade, max ${esc(usd(f.maxPerTradeUsd))}, ${esc(usd(f.dailyCapUsd))} a day` : "Not following an agent"}
@@ -3635,7 +3715,7 @@ async function pageMe(page) {
     page.innerHTML = `<header class="page-head page-head-row"><div><p class="eyebrow" data-reveal>Self-custody</p><h1 data-reveal>My wallet</h1>
         <p class="lede" data-reveal>Your keys stay with you. Flash executes on Base.</p></div>
         ${wallet.address ? '<div class="btn-row"><button type="button" class="btn btn-primary btn-sm" data-me-trade>Trade from my wallet</button><button type="button" class="btn btn-ghost btn-sm" data-me-off>Disconnect</button></div>' : ""}</header>
-      ${wallet.address ? '<section class="panel acct" data-acct aria-label="Arena account"><div class="skel skel-row"></div></section><div class="section-head section"><h2>Your own wallet</h2></div>' : ""}
+      ${wallet.address ? '<section class="panel acct" data-acct aria-label="Arena account">${SK.panel()}</section><div class="section-head section"><h2>Your own wallet</h2></div>' : ""}
       <div class="section-tight" data-me></div>`;
     const box = $("[data-me]", page);
     const acct = $("[data-acct]", page);
@@ -3794,19 +3874,100 @@ window.addEventListener("online", () => { updateChrome(); refreshStats(); connec
 window.addEventListener("offline", updateChrome);
 window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); state.installPrompt = e; $$("[data-install]").forEach((b) => (b.disabled = false)); });
 
+// The service worker takes over as soon as a new version is installed. A
+// page that just opened reloads into it at once; one in use (a form open, or
+// open for a while) gets a "Reload" button instead of losing its place.
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js").then((reg) => {
-    reg.addEventListener("updatefound", () => {
-      const nw = reg.installing;
-      nw?.addEventListener("statechange", () => {
-        if (nw.state === "installed" && navigator.serviceWorker.controller) {
-          toast("A new version is ready.", "", { label: "Reload", run: () => nw.postMessage("skip-waiting") });
-        }
-      });
-    });
-  }).catch(() => { /* http in dev without SW support */ });
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register("/sw.js").catch(() => { /* http in dev without SW support */ });
   let reloaded = false;
-  navigator.serviceWorker.addEventListener("controllerchange", () => { if (!reloaded) { reloaded = true; location.reload(); } });
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hadController || reloaded) return; // first install: this page already runs the newest files
+    const inUse = sheet?.open || document.activeElement?.matches?.("input, textarea, select") || performance.now() > 20000;
+    if (inUse) { toast("Agent Arena was updated.", "", { label: "Reload", run: () => location.reload() }); return; }
+    reloaded = true;
+    location.reload();
+  });
+}
+
+/* ---------------- install the app (PWA) ---------------- */
+// Chrome, Edge and Android browsers fire beforeinstallprompt; Safari on
+// iPhone and iPad installs from Share > Add to Home Screen, so it gets the
+// steps instead. Wallet and social in-app browsers cannot install apps.
+const INSTALL_NO = "arena.installNo";
+const UA = navigator.userAgent || "";
+const isIOS = /iPhone|iPad|iPod/i.test(UA) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const inAppBrowser = /FBAN|FBAV|Instagram|Line\/|MetaMask|CoinbaseWallet|Trust\/|TokenPocket|Telegram|; wv\)/i.test(UA);
+const isStandalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+let installEvt = null, installOffered = false;
+const canInstall = () => !isStandalone() && !inAppBrowser && (!!installEvt || isIOS);
+function syncInstall() { $$("[data-install-link]").forEach((b) => { b.hidden = !canInstall(); }); }
+addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installEvt = e; syncInstall(); offerInstall(); });
+addEventListener("appinstalled", () => {
+  installEvt = null; $(".install")?.remove(); syncInstall();
+  toast("Installed. Open Agent Arena from your home screen or app list.", "ok");
+});
+function offerInstall() {
+  const no = +store.get(INSTALL_NO, 0);
+  if (installOffered || !canInstall() || (no && Date.now() - no < 14 * 864e5)) return;
+  installOffered = true;
+  splashDone.then(() => setTimeout(showInstallCard, 6000));
+}
+function showInstallCard() {
+  if (!canInstall() || $(".install")) return;
+  // Never over a sheet, a sticky form button or the operator pages.
+  if (sheet.open || $(".mobile-cta") || /^#\/(admin|operator|wallets|approvals)/.test(location.hash)) { setTimeout(showInstallCard, 8000); return; }
+  const ios = isIOS && !installEvt;
+  const el = document.createElement("div");
+  el.className = "install";
+  el.setAttribute("role", "region");
+  el.setAttribute("aria-label", "Install the app");
+  el.innerHTML = `<img src="/icons/icon-192.png" alt="" width="44" height="44">
+    <div class="install-text"><b>Install Agent Arena</b><span>${ios ? "Add it to your Home Screen." : "Full screen, one tap away."}</span></div>
+    <button type="button" class="btn btn-primary btn-sm" data-install-go>${ios ? "Show me" : "Install"}</button>
+    <button type="button" class="install-x" data-install-x aria-label="Not now">×</button>`;
+  document.body.append(el);
+  $("[data-install-go]", el).addEventListener("click", installApp);
+  $("[data-install-x]", el).addEventListener("click", () => { store.set(INSTALL_NO, Date.now()); el.classList.add("is-out"); setTimeout(() => el.remove(), 260); });
+}
+async function installApp() {
+  $(".install")?.remove();
+  if (installEvt) {
+    const e = installEvt;
+    installEvt = null;
+    try { await e.prompt(); const { outcome } = await e.userChoice; if (outcome !== "accepted") store.set(INSTALL_NO, Date.now()); } catch { /* the prompt can be used once */ }
+    syncInstall();
+    return;
+  }
+  if (isIOS) {
+    const sb = openSheet("Install on iPhone or iPad");
+    sb.innerHTML = `<ol class="ios-steps">
+      <li><span class="ios-ico">${SHARE_ICON.more}</span><div><b>Tap Share</b><span>The square with an arrow, in Safari's toolbar.</span></div></li>
+      <li><span class="ios-ico"><svg ${SVG_LINE}><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M12 8.5v7M8.5 12h7"/></svg></span><div><b>Add to Home Screen</b><span>Scroll the list down if you don't see it.</span></div></li>
+      <li><span class="ios-ico"><svg ${SVG_LINE}><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span><div><b>Tap Add</b><span>Agent Arena then opens full screen from your Home Screen.</span></div></li></ol>
+      <div class="btn-row sheet-cta"><button type="button" class="btn btn-primary btn-block" data-sheet-close>Got it</button></div>`;
+  }
+}
+$$("[data-install-link]").forEach((b) => b.addEventListener("click", installApp));
+syncInstall();
+if (isIOS && !isStandalone() && !inAppBrowser) offerInstall();
+
+/* ---------------- launch screen ---------------- */
+// Shown once per browser session while the app starts, about 1.3 s: the mark
+// draws, the name rises in, then it fades to the page (skeletons cover any
+// data still loading). CSS hides it by itself if this script never runs.
+function hideSplash() {
+  const el = $("[data-splash]");
+  if (!el) { splashDoneResolve(); return; }
+  el.classList.add("is-out");
+  setTimeout(() => { el.remove(); splashDoneResolve(); }, 450);
+}
+if (store.get("arena.splash", false, true) || reduceMotion) {
+  $("[data-splash]")?.remove();
+  splashDoneResolve();
+} else {
+  store.set("arena.splash", true, true);
+  setTimeout(hideSplash, Math.max(0, 1300 - performance.now()));
 }
 
 refreshStats().then(() => current?.onStats?.());

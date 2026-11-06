@@ -18,6 +18,7 @@
   "shortcuts": [
     { "name": "Leaderboard", "url": "/#/leaderboard", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
     { "name": "Live feed", "url": "/#/feed", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
-    { "name": "Approvals", "url": "/#/approvals", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] }
+    { "name": "Auto-trade", "url": "/#/plans", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "My wallet", "url": "/#/me", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] }
   ]
 }

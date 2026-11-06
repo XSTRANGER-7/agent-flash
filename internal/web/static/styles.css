@@ -238,6 +238,9 @@ h3 { font: 600 17px/1.3 var(--font); letter-spacing: 0; }
 
 /* ---------- layout ---------- */
 main { flex: 1; width: 100%; max-width: var(--shell); margin: 0 auto; padding: var(--s5) var(--gutter) var(--s8); outline: none; }
+/* The page area always fills the screen, so the footer never shows while a
+   page loads and then jumps away when its content arrives. */
+main { min-height: 100vh; min-height: 100dvh; }
 .page { animation: pageIn .42s var(--spring); }
 @keyframes pageIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @supports (view-transition-name: none) {
@@ -759,7 +762,7 @@ a.trade-item:active { background: var(--fill); }
 }
 
 /* ---------- home: why, steps, flow, stack, share, faq, cta ---------- */
-.why-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: var(--s3); }
+.why-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: var(--s3); }
 .why { position: relative; display: grid; align-content: start; gap: 8px; padding: var(--s5); border-radius: var(--r-card); background: var(--pine); border: 1px solid var(--hair); color: var(--mist); text-decoration: none; overflow: hidden; transition: transform .25s ease, border-color .25s ease, background .25s ease; min-width: 0; }
 .why::after { content: ""; position: absolute; inset: auto -40% -60% auto; width: 220px; height: 220px; border-radius: 50%; background: radial-gradient(closest-side, rgba(188, 255, 49, .16), transparent); opacity: 0; transition: opacity .3s ease; pointer-events: none; }
 .why:hover, .why:focus-visible { transform: translateY(-4px); border-color: rgba(188, 255, 49, .35); background: #1b1b1b; }
@@ -976,7 +979,7 @@ a.trade-item:active { background: var(--fill); }
 
 /* sub-wallets on My wallet */
 .subs { display: grid; gap: var(--s3); margin: var(--s3) 0 0; padding: 0; list-style: none; }
-.sub { display: grid; gap: var(--s2); padding: var(--s4); border-radius: 20px; background: var(--moss); min-width: 0; }
+.subw { display: grid; gap: var(--s2); padding: var(--s4); border-radius: 20px; background: var(--moss); min-width: 0; } /* a sub-wallet card (not .who .sub) */
 .sub-top { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--s3); min-width: 0; }
 .sub-top > div:first-child { min-width: 0; }
 .sub-eq { font-size: 20px; font-weight: 700; text-align: right; white-space: nowrap; }
@@ -1547,6 +1550,100 @@ a.chip::after { content: ""; position: absolute; inset: -8px -4px; }
 .agent-link, .sig-agent, a.addr, .docs-toc a { display: inline-block; padding-block: 11px; margin-block: -11px; }
 .docs-toc a { min-height: 44px; display: inline-flex; align-items: center; margin-block: 0; padding-block: 0; }
 @media (pointer: coarse) { main a[href^="#/agent/"] { padding-block: 11px; margin-block: -11px; display: inline-block; } }
+
+/* ---------- launch screen ---------- */
+.splash { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; background: #030303; transition: opacity .42s var(--ease), visibility .42s; animation: splashAuto .4s 4s forwards; }
+.splash.is-out { opacity: 0; visibility: hidden; pointer-events: none; }
+@keyframes splashAuto { to { opacity: 0; visibility: hidden; } }
+.splash-in { display: grid; justify-items: center; gap: 14px; transform: translateY(-4vh); }
+.splash-mark { width: 68px; height: 68px; color: #bcff31; overflow: visible; filter: drop-shadow(0 0 18px rgba(188, 255, 49, .28)); }
+.sp-box, .sp-line { fill: none; stroke: currentColor; stroke-dasharray: 100; stroke-dashoffset: 100; }
+.sp-box { stroke-opacity: .38; stroke-width: 2; animation: spDraw .7s .05s cubic-bezier(.2, .7, .2, 1) forwards; }
+.sp-line { stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; animation: spDraw .5s .4s cubic-bezier(.2, .7, .2, 1) forwards; }
+.sp-dot { fill: currentColor; transform-box: fill-box; transform-origin: center; transform: scale(0); animation: spPop .4s .82s cubic-bezier(.3, 1.6, .5, 1) forwards; }
+.splash-word { margin: 0; display: flex; gap: .28em; overflow: hidden; padding: 2px 4px; font: 700 23px/1.1 var(--font); letter-spacing: -.01em; color: #f6f6f6; }
+.splash-word span { display: inline-block; transform: translateY(115%); animation: spRise .55s cubic-bezier(.2, .8, .2, 1) forwards; }
+.splash-word .sw-a { animation-delay: .42s; }
+.splash-word .sw-b { color: #bcff31; animation-delay: .52s; }
+.splash-sub { margin: 0; font: 600 11px/1.3 var(--font); letter-spacing: .14em; text-transform: uppercase; color: #9a9a9a; opacity: 0; animation: spFade .45s .8s forwards; }
+@keyframes spDraw { to { stroke-dashoffset: 0; } }
+@keyframes spPop { to { transform: scale(1); } }
+@keyframes spRise { to { transform: none; } }
+@keyframes spFade { to { opacity: 1; } }
+
+/* ---------- skeletons shaped like their content ---------- */
+.skel { animation: skIn .3s .15s both; } /* appears only if loading takes a moment */
+@keyframes skIn { from { opacity: 0; } }
+.glass .skel, .panel .skel, .rules .skel, .market .skel, .share-card .skel { background: rgba(255, 255, 255, .06); }
+.sk { display: grid; gap: var(--s4); }
+.sk-line { display: block; height: 12px; border-radius: 6px; }
+.sk-w20 { width: 20%; } .sk-w30 { width: 30%; } .sk-w40 { width: 40%; } .sk-w50 { width: 50%; } .sk-w60 { width: 60%; } .sk-w80 { width: 80%; }
+.sk-val { width: 56px; margin-left: auto; }
+.rule > dt > .sk-line { width: min(170px, 42vw); }
+.sk-title { display: block; height: 30px; width: 55%; border-radius: 10px; }
+.sk-head { display: flex; align-items: center; gap: var(--s4); padding-top: var(--s4); }
+.sk-avatar { flex: none; width: 60px; height: 60px; border-radius: 50%; }
+.sk-stack { flex: 1; display: grid; gap: 10px; min-width: 0; }
+.sk-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s3); }
+.sk-stat { display: block; height: 74px; }
+.sk-chart { display: block; height: 220px; border-radius: var(--r-card); }
+.sk-rows { gap: 0; }
+.sk-row { display: flex; align-items: center; gap: var(--s3); min-height: 73px; border-bottom: 1px solid var(--hair); }
+.sk-row .sk-stack { gap: 9px; }
+.sk-dot { flex: none; display: block; width: 38px; height: 38px; border-radius: 50%; }
+.sk-dot-sm { width: 26px; height: 26px; }
+.sk-pill { flex: none; display: block; width: 64px; height: 26px; border-radius: 13px; }
+.sk-spark { display: block; width: 72px; height: 30px; border-radius: 8px; }
+.sk-srow { min-height: 67px; pointer-events: none; }
+.sk-cards { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.sk-card { display: block; height: 200px; border-radius: var(--r-card); }
+.sk-sig { height: 240px; }
+.sk-form { max-width: 640px; }
+.sk-field { display: grid; gap: 8px; }
+.sk-input { display: block; height: 50px; border-radius: 14px; }
+.sk-price { display: block; height: 44px; width: 70%; margin: var(--s3) 0; border-radius: 12px; }
+.sk-spec { display: block; height: 120px; margin-top: var(--s4); border-radius: var(--r-item); }
+.market-copy .sk-line + .sk-price + .sk-line { margin-bottom: 0; }
+.sk-mchart { display: block; height: 171px; border-radius: var(--r-item); }
+.sk-fill { display: block; height: 100%; min-height: 300px; border-radius: inherit; }
+.share-card { min-height: 300px; }
+@media (max-width: 760px) { .sk-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } .sk-chart { height: 180px; } .sk-mchart { height: 71px; } .sk-sig { height: 280px; } }
+@media (prefers-reduced-motion: reduce) { .skel, .skel::after { animation: none; } }
+
+/* ---------- wallet apps on a phone ---------- */
+.sheet-btn.wl-mm .sh-ico { background: #f6851b; color: #fff; }
+.sheet-btn.wl-cb .sh-ico { background: #0052ff; color: #fff; }
+.sheet-btn.wl-tw .sh-ico { background: #0500ff; color: #fff; }
+.sheet-btn.wl-ph .sh-ico { background: #ab9ff2; color: #1c1c1c; }
+.sheet-btn.wl-ok .sh-ico { background: #000; color: #fff; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .22); }
+
+/* ---------- install the app ---------- */
+.install {
+  position: fixed; z-index: 70; left: max(20px, env(safe-area-inset-left)); bottom: 20px; display: flex; align-items: center; gap: 12px;
+  width: min(440px, calc(100vw - 32px)); padding: 12px 12px 12px 14px; border-radius: 22px; background: rgba(28, 28, 28, .96);
+  border: 1px solid var(--hair-2); box-shadow: 0 24px 60px -20px rgba(0, 0, 0, .85); animation: installIn .5s var(--spring) both;
+}
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .install { background: rgba(28, 28, 28, .84); -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%); }
+}
+.install img { flex: none; width: 44px; height: 44px; border-radius: 12px; }
+.install-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.install-text b { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.install-text span { font-size: 13px; line-height: 1.3; color: var(--sage); }
+.install .btn { flex: none; }
+.install-x { flex: none; display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 50%; background: var(--moss); color: var(--mist); font-size: 18px; cursor: pointer; }
+.install.is-out { opacity: 0; transform: translateY(12px); transition: opacity .25s, transform .25s; }
+@keyframes installIn { from { opacity: 0; transform: translateY(24px) scale(.98); } }
+.foot-install { display: inline-flex; align-items: center; min-height: 44px; padding: 0 8px; border: 0; background: none; color: var(--signal); font: 600 14px var(--font); cursor: pointer; }
+.foot-install[hidden] { display: none; }
+.ios-steps { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--s3); }
+.ios-steps li { display: flex; align-items: center; gap: var(--s3); padding: 12px; border-radius: var(--r-item); background: var(--ink-2); }
+.ios-steps b { display: block; font-size: 15px; }
+.ios-steps div > span { font-size: 13px; color: var(--sage); }
+.ios-ico { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: var(--moss); color: var(--signal); }
+.ios-ico svg { width: 21px; height: 21px; }
+@media (max-width: 860px) { .install { left: 12px; right: 12px; width: auto; bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 22px); } }
+@media (prefers-reduced-motion: reduce) { .install { animation: none; } }
 
 /* ---------- accessibility fixes (QA, Nov 7) ---------- */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }

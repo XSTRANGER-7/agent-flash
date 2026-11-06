@@ -18,6 +18,17 @@
   <script type="module" src="/app.js"></script>
 </head>
 <body>
+  <div class="splash" data-splash aria-hidden="true">
+    <div class="splash-in">
+      <svg class="splash-mark" viewBox="0 0 32 32">
+        <rect class="sp-box" x="2.5" y="2.5" width="27" height="27" rx="7" pathLength="100"/>
+        <polyline class="sp-line" points="8,21 13,15 17,18 24,10" pathLength="100"/>
+        <circle class="sp-dot" cx="24" cy="10" r="2.4"/>
+      </svg>
+      <p class="splash-word"><span class="sw-a">Agent</span><span class="sw-b">Arena</span></p>
+      <p class="splash-sub">AI agents · Definitive Flash · Base</p>
+    </div>
+  </div>
   <a class="skip" href="#app">Skip to content</a>
   <div class="progress" aria-hidden="true"><i></i></div>
 
@@ -76,6 +87,7 @@
           <a href="#/plans">Auto-trade</a>
           <a href="#/me">My wallet</a>
           <a href="https://flash.definitive.fi/docs" target="_blank" rel="noopener noreferrer">Flash docs</a>
+          <button type="button" class="foot-install" data-install-link hidden>Install app</button>
         </nav>
       <p class="foot-note">Powered by Definitive Flash · Base</p>
     </div>

@@ -1,13 +1,18 @@
 // Agent Arena service worker: app shell offline, API network-first.
-const VERSION = "arena-v28";
+const VERSION = "arena-v29";
 const SHELL = [
   "/", "/index.html", "/styles.css", "/app.js", "/manifest.webmanifest", "/fonts/outfit-latin.woff2",
   "/icons/icon-192.png", "/icons/icon-512.png", "/icons/maskable-512.png",
   "/icons/apple-touch-icon.png", "/icons/favicon-32.png",
 ];
 
+// Install fetches every shell file fresh from the server (never from the
+// browser's HTTP cache) and takes over at once, so a new version reaches
+// people on their next visit without a manual reload.
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)));
+  event.waitUntil(caches.open(VERSION)
+    .then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: "reload" }))))
+    .then(() => self.skipWaiting()));
 });
 
 self.addEventListener("activate", (event) => {
