@@ -353,7 +353,12 @@ func (e *Engine) record(ctx context.Context, in referee.Intent, w *wallet.Wallet
 		Attributes: map[string]any{"type": "trade", "season": e.Cfg.SeasonID, "agentid": t.AgentID, "wallet": strings.ToLower(w.Address()), "token": t.Token, "status": t.Status, "copy": boolInt(t.CopyOf != ""), "sizeusd": t.SizeUSD},
 		Payload:    t})
 
-	if in.CopyOf == "" && !in.Test && in.Kind != "invest" && w.Role == wallet.RoleAgent {
+	// Copies follow trades from an agent's own wallet: a built-in agent's, or
+	// the account of a community agent (its wallet id is the agent id; that
+	// wallet's role is "follower", so the role alone is not enough).
+	_, isAgent := e.AgentMap()[in.AgentID]
+	ownWallet := w.Role == wallet.RoleAgent || (isAgent && w.ID == in.AgentID)
+	if in.CopyOf == "" && !in.Test && in.Kind != "invest" && ownWallet {
 		e.wg.Add(1)
 		go func() {
 			defer e.wg.Done()

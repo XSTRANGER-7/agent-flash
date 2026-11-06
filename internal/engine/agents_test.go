@@ -3,9 +3,11 @@ package engine
 import (
 	"context"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/vikram/agent-arena/internal/referee"
 	"github.com/vikram/agent-arena/internal/store"
 )
 
@@ -59,6 +61,41 @@ func TestPeopleCanAddAgentsWhileRunning(t *testing.T) {
 		time.Sleep(40 * time.Millisecond)
 	}
 	t.Fatal("the new agent never traded its signal")
+}
+
+// Copy followers of a community agent copy its trades. Its wallet is the
+// maker's account (role follower), which the copy fan-out once ignored.
+func TestCommunityAgentTradesAreCopied(t *testing.T) {
+	e, ff := setup(t)
+	ua := store.UserAgent{ID: "follower1", Name: "Kaku", Owner: "0x000000000000000000000000000000000000dEaD", Kind: "contrarian",
+		Streak: 2, TPPct: 1.5, SLPct: 1, SizePct: 25, CreatedAt: time.Now().UTC()}
+	e.Store.PutUserAgent(ua)
+	e.LoadUserAgents()
+	cw, err := e.Wallets.Create("copier")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ff.mu.Lock()
+	ff.usdc[strings.ToLower(cw.Address())] = 12
+	ff.mu.Unlock()
+	e.Store.PutFollow(&store.Follow{FollowerID: "copier", AgentID: "follower1", Mode: "copy", AllocationPct: 25, MaxPerTradeUSD: 3, DailyCapUSD: 10, Active: true})
+
+	in := referee.Intent{AgentID: "follower1", WalletID: "follower1", Kind: "agent", OrderType: "market+bracket", Token: "WETH",
+		SizePct: 25, Price: 3000, TakeProfit: 3045, StopLoss: 2970, Reason: "test"}
+	if res := e.Propose(context.Background(), in); res.Trade == nil {
+		t.Fatalf("agent trade: %+v", res.Decision)
+	}
+	e.Wait()
+	var cp *store.Trade
+	for _, tr := range e.Store.Trades("follower1", 0) {
+		if tr.WalletID == "copier" {
+			tc := tr
+			cp = &tc
+		}
+	}
+	if cp == nil || cp.CopyOf == "" || cp.SizeUSD != 3 || cp.StopLoss != 2970 {
+		t.Fatalf("community agent trade not copied: %+v", cp)
+	}
 }
 
 // A paused agent does not trade.
