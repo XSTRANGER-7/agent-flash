@@ -1,5 +1,5 @@
 // Agent Arena service worker: app shell offline, API network-first.
-const VERSION = "arena-v21";
+const VERSION = "arena-v24";
 const SHELL = [
   "/", "/index.html", "/styles.css", "/app.js", "/manifest.webmanifest", "/fonts/outfit-latin.woff2",
   "/icons/icon-192.png", "/icons/icon-512.png", "/icons/maskable-512.png",
@@ -27,6 +27,7 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET" || url.origin !== self.location.origin) return;
   // Never cache the live stream, admin data or metrics.
   // Wallet data is personal; share pages and RSS are for crawlers and readers.
+  if (url.pathname.startsWith("/media/")) return; // video: let the browser stream it (range requests)
   if (url.pathname.startsWith("/v1/wallet") || url.pathname.startsWith("/v1/me") || url.pathname.startsWith("/s/") || url.pathname === "/signals.rss") return;
   if (url.pathname.startsWith("/v1/feed/stream") || url.pathname.startsWith("/v1/admin") ||
       url.pathname === "/metrics" || url.pathname === "/readyz" || url.pathname === "/healthz") return;

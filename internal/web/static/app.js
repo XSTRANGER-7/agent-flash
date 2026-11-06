@@ -652,13 +652,13 @@ const FLOW = [
   ["copy", "Followers copy", "Copiers and investors get the same trade in their own sub-wallets, within their own limits."],
   ["chart", "Exit and proof", "The bracket closes the trade. Profit and loss come from Flash's fills, and every step links onchain."],
 ];
-const STACK = [
-  ["Definitive Flash", "Execution", "Market, limit, TWAP, stop and bracket orders through one API, gas included."],
-  ["Base", "Chain", "Fast, low-cost Ethereum layer 2. Every trade settles here."],
-  ["Uniswap v3 oracle", "Price check", "An independent onchain price to verify each Flash quote and to backtest rules."],
-  ["USDC · EIP-3009", "Gasless deposits", "You sign once; the arena's gas tank sends the transfer."],
-  ["EIP-712", "No blind signing", "Every order is checked field by field before it is signed."],
-  ["Arkiv", "Public record", "Trades, results and predictions mirrored as open data."],
+const SECURE = [
+  ["Separate sub-wallet", "Each follower, agent and plan trades from its own wallet, never from yours."],
+  ["Payout locked to you", "Withdrawals go only to your address. The app cannot change it."],
+  ["Capped approvals", "Flash may pull only the trade size, never an open-ended amount."],
+  ["No blind signing", "Every Flash order is checked field by field before it is signed."],
+  ["Stop loss on every trade", "Plus your daily cap and a loss limit that pauses copying."],
+  ["Emergency stop", "One switch cancels open orders and halts all trading."],
 ];
 const FAQ = [
   ["Is this real money?", "It can be. The arena runs in paper mode (mock money with real Flash quotes) or live mode on Base. The badge at the top shows which one you are using."],
@@ -758,40 +758,6 @@ function wireHow(scope) {
   return () => clearInterval(timer);
 }
 
-// "Built on real DeFi": Agent Arena in the middle, the protocols it uses
-// around it, with data flowing along the lines. Tap a node for its role.
-function orbitHTML() {
-  const W = 560, H = 380, cx = W / 2, cy = H / 2, rx = 210, ry = 140;
-  const pos = STACK.map((_, k) => { const a = -Math.PI / 2 + (k / STACK.length) * Math.PI * 2; return [cx + rx * Math.cos(a), cy + ry * Math.sin(a)]; });
-  return `<div class="orbit">
-    <svg class="orbit-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Agent Arena connects to ${esc(STACK.map((s) => s[0]).join(", "))}">
-      <ellipse class="o-ring" cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}"/>
-      ${pos.map(([x, y], k) => `<path class="o-link" data-o="${k}" d="M${cx} ${cy} L${x.toFixed(1)} ${y.toFixed(1)}"/>`).join("")}
-      <g class="o-core"><circle cx="${cx}" cy="${cy}" r="56"/><text x="${cx}" y="${cy - 4}" text-anchor="middle">Agent</text><text x="${cx}" y="${cy + 16}" text-anchor="middle">Arena</text></g>
-      ${pos.map(([x, y], k) => `<g class="o-node" data-o="${k}" tabindex="0" role="button" aria-label="${esc(STACK[k][0])}: ${esc(STACK[k][1])}"><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="40"/><text x="${x.toFixed(1)}" y="${(y - 2).toFixed(1)}" text-anchor="middle">${esc(STACK[k][0].split(" ")[0])}</text><text class="o-role" x="${x.toFixed(1)}" y="${(y + 15).toFixed(1)}" text-anchor="middle">${esc(STACK[k][1])}</text></g>`).join("")}
-    </svg>
-    <div class="orbit-card" data-orbit-card aria-live="polite"></div>
-    <div class="orbit-rail" role="list">${STACK.map(([name, role, line]) => `<div class="orbit-chip" role="listitem"><span class="stack-role">${esc(role)}</span><b>${esc(name)}</b><p>${esc(line)}</p></div>`).join("")}</div>
-  </div>`;
-}
-function wireOrbit(scope) {
-  const card = $("[data-orbit-card]", scope);
-  if (!card) return;
-  const nodes = $$(".o-node", scope), links = $$(".o-link", scope);
-  const pick = (k) => {
-    nodes.forEach((n) => n.classList.toggle("is-on", +n.dataset.o === k));
-    links.forEach((l) => l.classList.toggle("is-on", +l.dataset.o === k));
-    const [name, role, line] = STACK[k];
-    card.innerHTML = `<span class="stack-role">${esc(role)}</span><b>${esc(name)}</b><p>${esc(line)}</p>`;
-  };
-  nodes.forEach((n) => {
-    n.addEventListener("click", () => pick(+n.dataset.o));
-    n.addEventListener("mouseenter", () => pick(+n.dataset.o));
-    n.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(+n.dataset.o); } });
-  });
-  pick(0);
-}
-
 async function pageHome(page) {
   page.innerHTML = `
   <section class="hero hero-ios">
@@ -830,9 +796,48 @@ async function pageHome(page) {
     <div class="why-grid" data-stagger>${WHY.map(([ico, title, line, href, cta]) => `<a class="why" href="${href}"><span class="why-ico" aria-hidden="true">${ICON[ico]}</span><h3>${esc(title)}</h3><p>${esc(line)}</p><span class="why-cta">${esc(cta)} ›</span></a>`).join("")}</div>
   </section>
 
+  <section class="section auto-show">
+    <div class="auto-copy" data-reveal><p class="eyebrow">Automate your trades</p><h2>Make an agent once. It trades for you.</h2>
+      <ol class="auto-list"><li><b>Pick a brain and a coin</b><span>Dip in an uptrend, dip buyer, trend or contrarian, on WETH or cbBTC.</span></li>
+        <li><b>Test it on real prices</b><span>See where it would have bought and sold over the last hours, after Flash's costs.</span></li>
+        <li><b>Launch</b><span>It watches the price every 15 seconds and trades through Flash with a take profit and stop loss.</span></li>
+        <li><b>Others can copy it</b><span>Your agent joins the leaderboard. Pause or edit its rules any time.</span></li></ol>
+      <div class="btn-row"><a class="btn btn-primary" href="#/me">Make my agent</a><a class="btn btn-ghost" href="#/leaderboard">See agents</a></div></div>
+    <figure class="auto-video" data-reveal><video data-demo src="/media/agent-demo.webm" poster="/media/agent-demo.jpg" muted loop playsinline preload="metadata" aria-label="Screen recording: making an agent, testing it on real prices, launching it and watching its live trade"></video>
+      <figcaption class="muted small">Recorded in the app (paper mode, real Flash quotes and real onchain prices).</figcaption></figure>
+  </section>
+
+  <section class="section gasless">
+    <div class="section-head"><div><p class="eyebrow">Gasless by design</p><h2>You never need ETH</h2></div></div>
+    <div class="gl-flow" data-stagger>
+      <div class="gl-node"><span class="gl-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3.5" y="6.5" width="17" height="12" rx="2.5"/><path d="M15.5 12.5h2M7 3.5h10"/></svg></span><b>You sign</b><span>One free signature (EIP-3009). No transaction from your wallet.</span></div>
+      <i class="gl-arrow" aria-hidden="true"></i>
+      <div class="gl-node"><span class="gl-ico" aria-hidden="true">${ICON.fuel}</span><b>Gas tank sends it</b><span>The arena submits your USDC transfer and pays its gas.</span></div>
+      <i class="gl-arrow" aria-hidden="true"></i>
+      <div class="gl-node"><span class="gl-ico" aria-hidden="true">${ICON.bolt}</span><b>Flash pays every order</b><span>Buys, sells and brackets are sent by Flash executors, gas included.</span></div>
+    </div>
+    <div class="gl-proof" data-reveal><div><span class="gl-zero num">$0.00</span><span class="muted small">gas paid by you</span></div>
+      <p class="small">Real example on Base: a 4 USDC deposit sent by the arena's gas tank for 0.0000006 ETH (about $0.0014). <a class="link" href="https://basescan.org/tx/0x3d9744562871bbc3444b000eea3a41ad726126fc816dbee4873f4d16285fd39f" ${EXT}>View on Basescan</a></p></div>
+  </section>
+
+  <section class="section secure">
+    <div class="section-head"><div><p class="eyebrow">Secured by sub-wallets</p><h2>Agents never touch your main wallet</h2></div></div>
+    <div class="sec-grid">
+      <figure class="sec-art" data-reveal aria-hidden="true"><svg viewBox="0 0 520 260" class="art">
+        <g class="s-box"><rect x="16" y="70" width="150" height="120" rx="22"/><text class="s-t" x="91" y="118" text-anchor="middle">Your wallet</text><text class="s-s" x="91" y="140" text-anchor="middle">keys stay with you</text></g>
+        <path class="s-path" d="M166 110 C220 70 300 70 354 110"/><text class="s-lbl" x="260" y="64" text-anchor="middle">USDC in (one free signature)</text>
+        <path class="s-path s-back" d="M354 150 C300 190 220 190 166 150"/><text class="s-lbl" x="260" y="206" text-anchor="middle">Out only to you · address locked</text>
+        <g class="s-lock a-pop d2"><rect x="246" y="168" width="28" height="22" rx="5"/><path d="M252 168v-6a8 8 0 0 1 16 0v6"/></g>
+        <g class="s-box s-sub"><rect x="354" y="70" width="150" height="120" rx="22"/><text class="s-t" x="429" y="118" text-anchor="middle">Sub-wallet</text><text class="s-s" x="429" y="140" text-anchor="middle">trades only via Flash</text></g>
+        <g class="a-pop d3"><circle class="s-shield" cx="429" cy="58" r="18"/><path class="s-check" d="m421 58 6 6 10-11"/></g>
+        <text class="a-cap" x="16" y="250">Agents trade the sub-wallet. Its money can only go back to you.</text></svg></figure>
+      <ul class="sec-list" data-stagger>${SECURE.map(([t, d]) => `<li><b>${esc(t)}</b><span>${esc(d)}</span></li>`).join("")}</ul>
+    </div>
+  </section>
+
   <section class="section">
     <div class="section-head"><div><p class="eyebrow">Start in 4 steps</p><h2>From wallet to your first copied trade</h2></div></div>
-    <ol class="steps4" data-stagger>${STEPS.map(([title, line], i) => `<li><span class="steps4-no num">${i + 1}</span><div><h3>${esc(title)}</h3><p>${esc(line)}</p></div></li>`).join("")}</ol>
+    <ol class="shots" data-stagger>${STEPS.map(([title, line], i) => `<li class="shot"><figure class="phone"><img src="/media/step-${i + 1}.jpg" alt="${esc(title)}: a real screen of Agent Arena" width="390" height="720" loading="lazy" decoding="async"></figure><div class="shot-copy"><span class="steps4-no num">${i + 1}</span><div><h3>${esc(title)}</h3><p>${esc(line)}</p></div></div></li>`).join("")}</ol>
     <div class="btn-row"><a class="btn btn-primary" href="#/me">Open my wallet</a><a class="btn btn-ghost" href="#/docs">Read the docs</a></div>
   </section>
 
@@ -846,11 +851,6 @@ async function pageHome(page) {
   <section class="section how" data-how>
     <div class="section-head"><div><p class="eyebrow">Under the hood</p><h2>How a trade runs</h2></div><span class="muted small how-hint">Tap a step · swipe on phones</span></div>
     ${howHTML()}
-  </section>
-
-  <section class="section orbit-sec" data-orbit>
-    <div class="section-head"><div><p class="eyebrow">Built on real DeFi</p><h2>Every piece is onchain or verifiable</h2></div></div>
-    ${orbitHTML()}
   </section>
 
   <section class="section share-band" data-share-band>
@@ -891,8 +891,17 @@ async function pageHome(page) {
     }));
   };
   shareBand();
+  // Demo video: plays (muted, looping) while on screen; with reduced motion it
+  // shows controls instead of autoplaying. Hidden if the file is missing.
+  const vid = $("[data-demo]", page);
+  if (vid) {
+    vid.addEventListener("error", () => vid.closest(".auto-video")?.remove(), { once: true });
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) vid.controls = true;
+    else if ("IntersectionObserver" in window) {
+      new IntersectionObserver((es) => es.forEach((en) => { if (en.isIntersecting) vid.play().catch(() => { vid.controls = true; }); else vid.pause(); }), { threshold: 0.35 }).observe(vid);
+    }
+  }
   const howStop = wireHow(page);
-  wireOrbit(page);
 
   const fill = () => {
     const s = state.stats;
@@ -3638,6 +3647,7 @@ async function route() {
   const seq = ++renderSeq;
   current?.cleanup?.();
   current = null;
+  if (sheet?.open) sheetClose(sheet); // a sheet belongs to the page it was opened on
   // A nav item is current for its own page, or for sub-pages it groups
   // (data-also), unless that sub-page has its own visible item.
   $$("[data-nav]").forEach((a) => {
