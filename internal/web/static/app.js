@@ -2907,13 +2907,15 @@ function walletAppLinks() {
     ["ok", "OKX Wallet", `https://www.okx.com/download?deeplink=${encodeURIComponent("okx://wallet/dapp/url?dappUrl=" + u)}`],
   ];
 }
-const WALLET_GLYPH = `<svg ${SVG_LINE}><rect x="3.5" y="6.5" width="17" height="12" rx="2.5"/><path d="M3.5 10h17M15.5 14.5h2"/></svg>`;
+// The wallets' own app icons (web3icons, MIT), served from this site.
+const WALLET_LOGO = { mm: "metamask", cb: "coinbase", tw: "trust", ph: "phantom", ok: "okx", rb: "rabby" };
+const walletLogo = (k) => `<img class="wl-logo" src="/icons/wallets/${WALLET_LOGO[k]}.svg" alt="" width="44" height="44" decoding="async">`;
 function walletAppSheet() {
   const sb = openSheet("Open in your wallet app");
   const local = location.protocol !== "https:";
   sb.innerHTML = `<p class="sheet-text">On a phone your wallet is its own app. Pick yours: Agent Arena opens inside it, already connected, and you sign in with one tap.</p>
     ${local ? '<p class="mode-note"><span class="mini mini-test">Note</span><span>Wallet apps need this site\'s public https link, not a local address.</span></p>' : ""}
-    <div class="sheet-grid share-grid">${walletAppLinks().map(([k, n, href]) => `<a class="sheet-btn wl-${k}" href="${esc(href)}" rel="noopener"><span class="sh-ico">${WALLET_GLYPH}</span><b>${esc(n)}</b></a>`).join("")}
+    <div class="sheet-grid share-grid">${walletAppLinks().map(([k, n, href]) => `<a class="sheet-btn wl" href="${esc(href)}" rel="noopener">${walletLogo(k)}<b>${esc(n)}</b></a>`).join("")}
       <button type="button" class="sheet-btn" data-copy-url><span class="sh-ico">${SHARE_ICON.link}</span><b>Copy link</b><span class="sh-sub"><i>for any other wallet</i></span></button></div>
     <p class="footnote">No wallet app yet? Get <a class="link" href="https://metamask.io/download/" ${EXT}>MetaMask</a> or <a class="link" href="https://www.coinbase.com/wallet/downloads" ${EXT}>Coinbase Wallet</a>, then come back to this page.</p>`;
   $("[data-copy-url]", sb).addEventListener("click", async () => {
@@ -2951,7 +2953,7 @@ async function connectWallet() {
   if (!eth()) {
     const sb = openSheet("Connect a wallet");
     sb.innerHTML = `<p class="sheet-text">No wallet found in this browser. Install one (or unlock it if it's installed), then reload this page.</p>
-      <div class="sheet-grid"><a class="sheet-btn" href="https://metamask.io/download/" ${EXT}>MetaMask</a><a class="sheet-btn" href="https://www.coinbase.com/wallet" ${EXT}>Coinbase Wallet</a><a class="sheet-btn" href="https://rabby.io/" ${EXT}>Rabby</a></div>`;
+      <div class="sheet-grid share-grid"><a class="sheet-btn wl" href="https://metamask.io/download/" ${EXT}>${walletLogo("mm")}<b>MetaMask</b></a><a class="sheet-btn wl" href="https://www.coinbase.com/wallet" ${EXT}>${walletLogo("cb")}<b>Coinbase Wallet</b></a><a class="sheet-btn wl" href="https://rabby.io/" ${EXT}>${walletLogo("rb")}<b>Rabby</b></a></div>`;
     return "";
   }
   try {

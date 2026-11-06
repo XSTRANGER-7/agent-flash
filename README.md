@@ -487,3 +487,12 @@ Order-type edge cases covered: a limit does not fill above its price, a TWAP can
 midway keeps the slices that filled, a stop buy waits for its trigger, separate SL / TP
 cancel each other when one fills, and invalid combinations (trailing or SL + TP on a
 market entry, DCA under 5 minutes) are refused before anything is signed.
+
+## Credits and licence
+
+Agent Arena is released under the MIT licence (see `LICENSE`).
+
+- Font: [Outfit](https://fonts.google.com/specimen/Outfit), SIL Open Font License, self-hosted.
+- Wallet logos in the connect sheet (`internal/web/static/icons/wallets/`): from
+  [web3icons](https://github.com/0xa3k5/web3icons) (`@web3icons/core` 4.0.50, MIT licence).
+  The logos are trademarks of their owners and are used only to link to each wallet.
