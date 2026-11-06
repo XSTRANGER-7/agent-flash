@@ -639,7 +639,10 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 		"limits": map[string]any{"maxTradeUsd": s.E.Cfg.MaxTradeUSD, "minTradeUsd": s.E.Cfg.MinTradeUSD, "maxPositionPct": s.E.Cfg.MaxPositionPct, "approvalThresholdUsd": s.E.Cfg.ApprovalThresholdUSD,
 			"maxApprovalUsd": s.E.Cfg.MaxApprovalUSD, "maxPriceDeviationPct": s.E.Cfg.MaxPriceDeviationPct, "maxAgentDrawdownPct": s.E.Cfg.MaxAgentDrawdownPct,
 			"maxEntryCostPct": s.E.Cfg.MaxEntryCostPct, "maxSlippage": s.E.Cfg.MaxSlippage, "maxTradesPerDay": s.E.Cfg.MaxTradesPerDay,
-			"netTargets": s.E.Cfg.NetTargets, "breakEvenStop": s.E.Cfg.BreakEvenStop},
+			"netTargets": s.E.Cfg.NetTargets, "breakEvenStop": s.E.Cfg.BreakEvenStop,
+			"maxMovePct": s.E.Cfg.MaxMovePct, "moveMinutes": int(time.Duration(s.E.Cfg.MoveChecks) * s.E.Cfg.PriceEvery / time.Minute),
+			"maxLossStreak": s.E.Cfg.MaxLossStreak, "lossStreakPauseMin": int(s.E.Cfg.LossStreakPause / time.Minute),
+			"dailyLossLimitUsd": s.E.Cfg.DailyLossLimitUSD, "maxHoldHours": s.E.Cfg.MaxHoldHours},
 	})
 }
 

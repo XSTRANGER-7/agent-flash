@@ -248,6 +248,9 @@ func (e *Engine) Propose(ctx context.Context, in referee.Intent) Result {
 	}
 	// Engine-only safety inputs: exit liquidity, Flash risk flag, agent drawdown.
 	tok, _ := e.tokenBySymbol(in.Token)
+	if d := e.riskGate(in, w, tok.Address); !d.OK {
+		return e.blocked(in, d)
+	}
 	in.Liquidity, in.RiskFlagged = e.tokenMeta(ctx, tok.Address)
 	in.AgentDrawdownPct = leaderboard.CurrentDrawdown(e.Store.PerfEquity(in.AgentID))
 	if err := normalizeStyle(&in); err != nil {
@@ -326,7 +329,7 @@ func (e *Engine) record(ctx context.Context, in referee.Intent, w *wallet.Wallet
 		MarkPrice: p.MarkPrice, EntryCostUSD: p.CostUSD, EntryCostPct: p.CostPct, ApproveTx: p.ApproveTx, Protection: "pending",
 		Paper: p.Paper, Test: in.Test, Kind: tradeKind(in, w), PlanID: in.PlanID, TokenAddr: tok.Address, TokenDec: tok.Decimals,
 		Style: in.Style, StopPrice: in.StopPrice, TwapMinutes: in.TwapMinutes, ProtectMode: in.ProtectMode, TrailPct: in.TrailPct,
-		BreakEven: in.BreakEven,
+		BreakEven: in.BreakEven, MaxHoldMin: in.MaxHoldMin,
 	}
 	if p.OriginalTP != p.TakeProfit {
 		t.OriginalTP = p.OriginalTP
@@ -557,7 +560,7 @@ func followerIntent(in referee.Intent) referee.Intent {
 // applyLimits puts a community agent's Advanced settings on its intent.
 func applyLimits(in *referee.Intent, l store.AgentLimits) {
 	in.MaxCostPct, in.MinTradeUSD, in.MaxTradeUSD, in.MaxTradesPerDay = l.MaxCostPct, l.MinTradeUSD, l.MaxTradeUSD, l.TradesPerDay
-	in.NetTargets, in.BreakEven = l.NetTargets, l.BreakEven
+	in.NetTargets, in.BreakEven, in.MaxHoldMin = l.NetTargets, l.BreakEven, l.MaxHoldMin
 	if l.SlippagePct > 0 {
 		in.MaxSlippage = strconv.FormatFloat(l.SlippagePct/100, 'f', 4, 64)
 	}

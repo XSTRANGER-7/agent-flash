@@ -29,6 +29,8 @@ func CheckAgentLimits(cfg *config.Config, l store.AgentLimits) (store.AgentLimit
 		return l, fmt.Errorf("smallest trade is above the largest")
 	case l.CooldownMin < 0 || l.CooldownMin > 1440:
 		return l, fmt.Errorf("cooldown after a loss: 0-1440 minutes")
+	case l.MaxHoldMin < 0 || (l.MaxHoldMin > 0 && l.MaxHoldMin < 5) || l.MaxHoldMin > 10080:
+		return l, fmt.Errorf("time limit per trade: 5-10080 minutes (7 days), or empty for none")
 	case !tri(l.NetTargets) || !tri(l.BreakEven):
 		return l, fmt.Errorf("net targets and break-even stop: on, off or empty")
 	}

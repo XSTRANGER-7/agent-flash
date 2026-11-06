@@ -44,6 +44,7 @@ type Intent struct {
 	MaxTradesPerDay int     `json:"-"`
 	NetTargets      string  `json:"-"` // on | off
 	BreakEven       string  `json:"-"` // on | off
+	MaxHoldMin      int     `json:"-"`
 
 	// Set by the engine only (never by API callers):
 	Liquidity        float64 `json:"-"` // token USD liquidity from Flash /search

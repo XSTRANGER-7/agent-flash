@@ -79,6 +79,8 @@ type Trade struct {
 	ApproveTx      string  `json:"approveTx,omitempty"`      // capped USDC approve, when one was needed
 	StopMoved      bool    `json:"stopMoved,omitempty"`      // stop loss moved to break-even (PATCH)
 	BreakEven      string  `json:"breakEven,omitempty"`      // on | off: the agent's own break-even setting ("" = arena)
+	MaxHoldMin     int     `json:"maxHoldMin,omitempty"`     // close at market after this many minutes (0 = arena setting)
+	ExitWhy        string  `json:"exitWhy,omitempty"`        // why the arena itself exited (time limit)
 
 	Timeline  []Step    `json:"timeline,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
@@ -180,6 +182,7 @@ type AgentLimits struct {
 	CooldownMin  int     `json:"cooldownMin,omitempty"`  // wait this long after a losing trade
 	NetTargets   string  `json:"netTargets,omitempty"`   // "" arena | on | off: raise TP to cover costs
 	BreakEven    string  `json:"breakEven,omitempty"`    // "" arena | on | off: stop to break-even halfway
+	MaxHoldMin   int     `json:"maxHoldMin,omitempty"`   // close at market after this long (0 = arena setting)
 }
 
 func (st *Store) PutUserAgent(a UserAgent) {

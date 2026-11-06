@@ -143,6 +143,14 @@ admin/demo API ──────────────┘                    
    peak is paused, and so is everyone copying it.
 9. **Receipts:** every trade keeps a timeline (quoted, approved, signed,
    submitted, filled, closed) for the UI and for support.
+9b. **Risk layer for automated entries** (agents, copies, investors, plans; `internal/engine/risk.go`):
+   a **volatility guard** (no entries while the price range over the last `MOVE_CHECKS` checks is wider
+   than `MAX_MOVE_PCT`, default 3% in 15 min), a **losing-streak pause** (`MAX_LOSS_STREAK` losses in a
+   row pause that wallet for `LOSS_STREAK_PAUSE`), a **daily loss kill switch** for real money
+   (`DAILY_LOSS_LIMIT_USD` realized today turns on the emergency stop) and a **time limit**
+   (`MAX_HOLD_HOURS`, or an agent's own Advanced setting, closes a position at market). Plus the
+   cost guard (`MAX_ENTRY_COST_PCT`), the live budget (`LIVE_BUDGET_USD`), per-wallet loss limits,
+   daily caps and pause, and per-agent Advanced settings that can only tighten, never pass the caps.
 10. Keys file must be `chmod 600`; keys are never logged; admin routes use a
    constant-time bearer check.
 

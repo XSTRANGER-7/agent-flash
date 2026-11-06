@@ -81,6 +81,13 @@ type Config struct {
 	MaxPriceDeviationPct float64 // refuse quotes that drift too far from the reference price
 	MinLiquidityUSD      float64 // refuse tokens that may be hard to sell ("can't sell" problem)
 	MaxAgentDrawdownPct  float64 // circuit breaker: pause an agent (and its copiers) past this drawdown
+	// Risk layer for automated entries (agents, copies, investors, plans):
+	MaxMovePct        float64       // no new entries when the price range over MoveChecks is wider than this %
+	MoveChecks        int           // price checks the volatility guard looks at (60 x 15 s = 15 min)
+	MaxLossStreak     int           // losses in a row that pause a wallet's automated entries
+	LossStreakPause   time.Duration // how long that pause lasts
+	DailyLossLimitUSD float64       // live: realized losses today that turn on the emergency stop (0 = off)
+	MaxHoldHours      float64       // close an automated position at market after this long (0 = off)
 	// Execution-cost guards (Flash quotes include a ~$0.06 fixed cost + ~0.36%).
 	MaxSlippage     string  // sent as maxSlippage on quote + order ("0.03" = 3%)
 	MaxEntryCostPct float64 // refuse entries whose all-in cost (from.notional - to.notional) is above this %
@@ -161,6 +168,12 @@ func Load() (*Config, error) {
 		MaxPriceDeviationPct: num("MAX_PRICE_DEVIATION_PCT", 1.5),
 		MinLiquidityUSD:      num("MIN_LIQUIDITY_USD", 1_000_000),
 		MaxAgentDrawdownPct:  num("MAX_AGENT_DRAWDOWN_PCT", 20),
+		MaxMovePct:           num("MAX_MOVE_PCT", 3),
+		MoveChecks:           int(num("MOVE_CHECKS", 60)),
+		MaxLossStreak:        int(num("MAX_LOSS_STREAK", 3)),
+		LossStreakPause:      dur("LOSS_STREAK_PAUSE", time.Hour),
+		DailyLossLimitUSD:    num("DAILY_LOSS_LIMIT_USD", 0),
+		MaxHoldHours:         num("MAX_HOLD_HOURS", 0),
 		PriceEvery:           dur("PRICE_EVERY", 15*time.Second),
 		AgentEvery:           dur("AGENT_EVERY", 30*time.Second),
 		EquityEvery:          dur("EQUITY_EVERY", 60*time.Second),

@@ -921,6 +921,10 @@ async function pageHome(page) {
         ["Allowance cap", "Onchain, per wallet.", usd(L.maxApprovalUsd, 0)],
         ["Circuit breaker", "Pauses an agent this far below its peak.", known(L.maxAgentDrawdownPct) ? `${L.maxAgentDrawdownPct}%` : "—"],
         ["Human approval", "For copies above this size.", usd(L.approvalThresholdUsd, 0)],
+        +L.maxMovePct > 0 ? ["Volatility guard", "No automated entries in a fast market.", `${L.maxMovePct}% in ${L.moveMinutes} min`] : null,
+        +L.maxLossStreak > 0 ? ["Losing-streak pause", "Automated trading waits after losses in a row.", `${L.maxLossStreak} losses · ${L.lossStreakPauseMin} min`] : null,
+        +L.dailyLossLimitUsd > 0 ? ["Daily loss kill switch", "Real-money trading stops for the day.", usd(L.dailyLossLimitUsd, 0)] : null,
+        +L.maxHoldHours > 0 ? ["Time limit", "Automated positions close after this long.", `${L.maxHoldHours} h`] : null,
       ].filter(Boolean);
       const box = $("[data-rules]", page);
       const htmlRules = rules.map(([t, , v]) => `<div class="rule"><dt>${esc(t)}</dt><dd class="rule-val num">${esc(v)}</dd></div>`).join("");
@@ -3387,6 +3391,7 @@ async function agentSheet(after, old = null, usdc = 0) {
           <div class="field"><label for="ag-min">Smallest trade ($)</label><input id="ag-min" name="minTradeUsd" type="number" min="1" max="${esc(L.maxTradeUsd ?? 100)}" step="0.5" placeholder="${esc(L.minTradeUsd || "")}" value="${lim("minTradeUsd")}" inputmode="decimal"><span class="hint">Small slices are lifted to this</span></div>
           <div class="field"><label for="ag-max">Largest trade ($)</label><input id="ag-max" name="maxTradeUsd" type="number" min="1" max="${esc(L.maxTradeUsd ?? 100)}" step="0.5" placeholder="${esc(L.maxTradeUsd ?? "")}" value="${lim("maxTradeUsd")}" inputmode="decimal"><span class="hint">Up to the arena's ${esc(usd(L.maxTradeUsd, 0))}</span></div>
           <div class="field"><label for="ag-cool">Wait after a loss (min)</label><input id="ag-cool" name="cooldownMin" type="number" min="0" max="1440" step="5" placeholder="0" value="${lim("cooldownMin")}" inputmode="numeric"><span class="hint">No new trade for this long</span></div>
+          <div class="field"><label for="ag-hold">Time limit per trade (min)</label><input id="ag-hold" name="maxHoldMin" type="number" min="5" max="10080" step="5" placeholder="${esc(L.maxHoldHours ? L.maxHoldHours * 60 : "none")}" value="${lim("maxHoldMin")}" inputmode="numeric"><span class="hint">Sell at market if neither target nor stop is hit</span></div>
           <div class="field"><label for="ag-net">Raise target to cover costs</label><select id="ag-net" name="netTargets"><option value="">Arena (${L.netTargets ? "on" : "off"})</option><option value="on" ${old?.limits?.netTargets === "on" ? "selected" : ""}>On</option><option value="off" ${old?.limits?.netTargets === "off" ? "selected" : ""}>Off</option></select></div>
           <div class="field"><label for="ag-be">Stop to break-even halfway</label><select id="ag-be" name="breakEven"><option value="">Arena (${L.breakEvenStop ? "on" : "off"})</option><option value="on" ${old?.limits?.breakEven === "on" ? "selected" : ""}>On</option><option value="off" ${old?.limits?.breakEven === "off" ? "selected" : ""}>Off</option></select></div>
         </div>
@@ -3402,7 +3407,7 @@ async function agentSheet(after, old = null, usdc = 0) {
       fast: Math.round(n("fast")), slow: Math.round(n("slow")), dipPct: n("dipPct"), window: Math.round(n("window")), streak: Math.round(n("streak")), trend: Math.round(n("trend")),
       takeProfitPct: n("takeProfitPct"), stopLossPct: n("stopLossPct"), sizePct: n("sizePct"),
       limits: { maxCostPct: n("maxCostPct") || 0, slippagePct: n("slippagePct") || 0, tradesPerDay: Math.round(n("tradesPerDay") || 0),
-        minTradeUsd: n("minTradeUsd") || 0, maxTradeUsd: n("maxTradeUsd") || 0, cooldownMin: Math.round(n("cooldownMin") || 0),
+        minTradeUsd: n("minTradeUsd") || 0, maxTradeUsd: n("maxTradeUsd") || 0, cooldownMin: Math.round(n("cooldownMin") || 0), maxHoldMin: Math.round(n("maxHoldMin") || 0),
         netTargets: String(v.get("netTargets") || ""), breakEven: String(v.get("breakEven") || "") } };
   };
   const body = (v) => {

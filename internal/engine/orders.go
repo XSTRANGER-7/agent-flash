@@ -309,6 +309,9 @@ func (e *Engine) closeFromExit(ctx context.Context, w *wallet.Wallet, tr store.T
 		e.Log.Info("trade closed", "trade", tr.ID, "pnlFromFills", recv-tr.USDCSpent, "pnlFromBalance", usdcNow-tr.USDCBefore)
 	}
 	reason := "exited by operator"
+	if tr.ExitWhy != "" {
+		reason = tr.ExitWhy // the arena closed it itself (time limit)
+	}
 	if !operator && tr.ProtectMode == "trailing" {
 		reason = "trailing stop hit"
 	} else if !operator {

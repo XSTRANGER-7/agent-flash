@@ -33,6 +33,8 @@ var (
 	invID  string // this run's investor sub-wallet
 	fails  int
 	total  int
+	// QA helper: print a fresh signed-in account (paper only) and exit.
+	newAccount = flag.Float64("new-account", -1, "create a signed-in paper account funded with this many USDC by signature, print {addr, token, exp, id} as JSON and exit")
 )
 
 type M = map[string]any
@@ -48,6 +50,18 @@ func main() {
 	if st["mode"] != "paper" {
 		fmt.Printf("server mode is %v; e2e only runs against MODE=paper (it places many orders)\n", st["mode"])
 		os.Exit(2)
+	}
+	if *newAccount >= 0 {
+		key, _, _ := evm.GenerateKey()
+		tok, _ := signIn(key)
+		_, me := meDo("POST", "/v1/me/account", M{}, tok)
+		if *newAccount > 0 {
+			_, p := meDo("POST", "/v1/me/deposit/prepare", M{"amountUsd": *newAccount}, tok)
+			meDo("POST", "/v1/me/deposit", M{"nonce": s(p, "nonce"), "signature": signTyped(key, s(p, "typedData"))}, tok)
+		}
+		out, _ := json.Marshal(M{"addr": key.Address(), "token": tok, "exp": time.Now().Add(7 * 24 * time.Hour).UTC(), "id": s(me, "account", "id")})
+		fmt.Println(string(out))
+		return
 	}
 	start := time.Now()
 	section("1. Transparency and public data")
