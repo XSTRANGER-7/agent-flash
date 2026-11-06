@@ -30,6 +30,45 @@ its Flash payload is checked field by field.
 
 Public records (agents, trades, results, predictions) are mirrored to **Arkiv**. Powered by Definitive Flash.
 
+More: **community agents** (anyone signs in with a wallet and makes an agent others can copy), **backtests on
+real onchain prices** before launch, **live trade charts**, Advanced settings per agent, gasless USDC deposits.
+
+## Real money onchain (Base mainnet, Nov 6-7, 2026)
+
+Every row is a real Definitive Flash order that filled on Base. The app's `#/proof` page lists them all with links.
+
+| What | Flash order | Base transaction |
+| --- | --- | --- |
+| **Limit + attached bracket** buy, $3 USDC → 0.001344 WETH (community agent's account) | `5b8e1c64-4479-4d1c-8553-f7341640adbb`, bracket `26722622-…` active | [0x5d1df04d…](https://basescan.org/tx/0x5d1df04dd87b7768ef51ee36b53bf8307f5969e737c95aa1563e5da6f898c92c) |
+| Community agent "Kaku agent" market + bracket buy, $2.50 | `ae9334fc-1ded-4774-9753-04df8310fc3c` | [0x392d6f14…](https://basescan.org/tx/0x392d6f14ca0fb0dc1127ff97206a918da139f7ca21f57efbb4360456151dbd4c) |
+| Exit: signed cancel of the bracket, then market sell | `b0391807-ae02-4d29-8e42-81038b5c3fd8` | [0xd65d69d0…](https://basescan.org/tx/0xd65d69d0deabd9ff5f38c23312522a0a162de287c807afbb79798e6887a7d37a) |
+| **Copy trade**: a follower's sub-wallet copied the agent, $1.50, same stop loss | `4b54fa34-54c4-4212-ae1f-03dbf7acffb8` | [0x06af2085…](https://basescan.org/tx/0x06af208537556257d5f2fa2a75acc610bfccf52d15f2b3e0e635e7867aadebf2) |
+| Capped approval (exactly the trade size) paid by the arena's gas tank | n/a | [0x033a4000…](https://basescan.org/tx/0x033a4000d2b853577a561589477c1aab772244d17c9b63a4174a91d16e821796) |
+
+Flash executors send every order transaction, so users pay no gas for trades. Profit and loss computed from Flash's
+fills matched the wallet balance change to the cent (−0.030982 USDC both ways).
+
+## Sponsor integrations
+
+**Definitive Flash (execution).** Every order goes through `POST /quote` + `POST /order` (REST), signed as an
+EIP-712 `FlashOrder` only after a field-by-field check (`internal/engine/executor.go`). Order styles: market,
+limit, TWAP/DCA and stop buys, each with an attached bracket or protection after the fill (`internal/engine/styles.go`);
+cancel, batch cancel and break-even PATCH (`internal/engine/orders.go`); orders WebSocket and streaming quotes
+(`internal/flash/ws.go`). Social layer: leaderboard, copy/invest, community agents, share cards, signals bot.
+
+**Uniswap v3 (onchain price).** The WETH/USDC pool on Base
+(`0xd0b53D9277642d899DF5C87A3966A349A798F224`) is read directly from Go: `slot0` is the reference price that every
+Flash quote is checked against, pool balances give exit liquidity, and `observe()` gives ~4 hours of
+time-weighted prices that power backtests and the live trade charts (`internal/arena/pool.go`,
+`internal/arena/backtest.go`, `internal/engine/backtest.go`). Developer feedback: [FEEDBACK.md](FEEDBACK.md).
+
+## How this was built (AI use)
+
+Built for ETHGlobal Mumbai 2026 by Vikram with **Claude Code** (Anthropic) as an AI pair programmer. Vikram
+chose the product, the features, the sponsor integrations and the safety rules, ran and judged every real-money test,
+and reviewed the results. Claude Code wrote most of the code, tests and docs under that direction. The first commit
+is large because the project lived locally before the repository was created; later work is in smaller commits.
+
 ## Why Go, why REST (not MCP)
 
 - **Parallel by design:** every agent runs on its own goroutine, copy trades fan
