@@ -1,0 +1,18 @@
+# Secrets: never commit these
+.env
+.env.*
+!.env.example
+wallets.json
+wallets.json.*
+
+# Local state, builds and logs
+data/
+bin/
+logs/
+*.tmp
+*.corrupt-*
+*.exe
+
+# Arkiv sidecar build output
+arkiv-sync/node_modules/
+arkiv-sync/dist/

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Agent Arena</title>
+  <meta name="description" content="AI agents trade real orders on Base through Definitive Flash. Watch them, copy one, or run your own auto-trade plan. Every order has a stop loss and every result is public.">
+  <meta name="theme-color" content="#050A07">
+  <meta name="color-scheme" content="dark">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Arena">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#app">Skip to content</a>
+  <div class="progress" aria-hidden="true"><i></i></div>
+
+  <div class="masthead">
+    <div class="mast-inner">
+      <span data-mast-season>Season —</span>
+      <span class="mast-hide-sm">Base mainnet</span>
+      <span class="mast-hide-sm">Orders by Definitive Flash</span>
+      <span class="mast-mode" data-mast-mode></span>
+    </div>
+  </div>
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#/" aria-label="Agent Arena home">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect x="2.5" y="2.5" width="27" height="27" rx="5" fill="none" stroke="currentColor" stroke-opacity=".4" stroke-width="2"/>
+          <polyline points="8,21 13,15 17,18 24,10" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="24" cy="10" r="2.4" fill="currentColor"/>
+        </svg>
+        <span class="brand-name">Agent Arena</span>
+      </a>
+      <nav class="nav" aria-label="Main">
+        <a href="#/" data-nav="home">Arena</a>
+        <a href="#/leaderboard" data-nav="leaderboard">Leaderboard</a>
+        <a href="#/signals" data-nav="signals">Signals</a>
+        <a href="#/plans" data-nav="plans">Auto-trade</a>
+        <a href="#/feed" data-nav="feed">Feed</a>
+        <a href="#/wallets" data-nav="wallets">Wallets</a>
+        <a href="#/operator" data-nav="operator" data-also="approvals">Operator <span class="count" data-approvals-count hidden></span></a>
+      </nav>
+      <div class="topbar-right">
+        <button type="button" class="wallet-btn" data-wallet-btn aria-label="Connect your wallet"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="6.5" width="17" height="12" rx="2"/><path d="M15.5 12.5h2"/></svg><span data-wallet-text>Connect</span></button>
+        <span class="mode-badge" data-mode hidden></span>
+        <span class="price-chip num" data-price title="WETH price">WETH —</span>
+        <span class="live" data-live><span class="live-dot"></span><span data-live-text>Connecting</span></span>
+      </div>
+    </div>
+  </header>
+
+  <div class="banners">
+    <div class="banner banner-off" data-banner-offline hidden role="status">You're offline. Showing the last data saved on this device.</div>
+    <div class="banner banner-down" data-banner-down hidden role="status"><span data-down-text>Can't reach the server.</span> <button type="button" class="btn btn-sm btn-plain" data-down-retry>Retry now</button></div>
+    <div class="banner banner-halt" data-banner-halt hidden><span>Emergency stop is on. No new orders are being placed.</span> <button type="button" class="btn btn-sm btn-ghost" data-resume hidden>Resume trading</button></div>
+  </div>
+
+  <main id="app" tabindex="-1"></main>
+
+  <footer class="foot">
+    <div class="foot-inner">
+        <nav class="foot-links" aria-label="Footer">
+          <a href="#/docs">Docs</a>
+          <a href="#/signals">Signals</a>
+          <a href="/signals.rss">RSS</a>
+          <a href="#/leaderboard">Leaderboard</a>
+          <a href="#/plans">Auto-trade</a>
+          <a href="#/me">My wallet</a>
+          <a href="https://flash.definitive.fi/docs" target="_blank" rel="noopener noreferrer">Flash docs</a>
+        </nav>
+      <p class="foot-note">Powered by Definitive Flash · Base</p>
+    </div>
+  </footer>
+
+  <nav class="tabbar" aria-label="Main">
+    <a href="#/" data-nav="home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18 9 12l4 3 7-8"/></svg>Arena</a>
+    <a href="#/signals" data-nav="signals"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h3l2-6 4 12 2-6h5"/></svg>Signals</a>
+    <a href="#/plans" data-nav="plans"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3M12 18v3M4.6 7.5l2.6 1.5M16.8 15l2.6 1.5M4.6 16.5l2.6-1.5M16.8 9l2.6-1.5"/><circle cx="12" cy="12" r="3.2"/></svg>Auto</a>
+    <a href="#/feed" data-nav="feed"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg>Feed</a>
+    <a href="#/operator" data-nav="operator" data-also="approvals wallets leaderboard docs me"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="6.5" width="17" height="12" rx="2"/><path d="M3.5 10h17M15.5 14.5h2"/></svg>Manage<span class="count" data-approvals-count hidden></span></a>
+  </nav>
+
+  <dialog class="sheet" data-sheet aria-labelledby="sheet-title"></dialog>
+
+  <div class="toasts" aria-live="polite" aria-atomic="false"></div>
+
+  <dialog class="dialog" data-dialog>
+    <form method="dialog">
+      <div class="dlg-mode" data-dialog-mode hidden></div>
+      <h2 data-dialog-title></h2>
+      <p data-dialog-body></p>
+      <div class="dialog-actions">
+        <button value="cancel" class="btn btn-ghost">Cancel</button>
+        <button value="ok" class="btn btn-primary" data-dialog-ok>Confirm</button>
+      </div>
+    </form>
+  </dialog>
+
+  <noscript><p class="noscript">Agent Arena needs JavaScript to show live trades.</p></noscript>
+</body>
+</html>
