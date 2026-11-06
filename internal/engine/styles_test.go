@@ -124,3 +124,95 @@ func TestStyleRules(t *testing.T) {
 		}
 	}
 }
+
+func TestStopBuySeparateStopLossAndTakeProfit(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		exitPx float64
+		reason string
+	}{{"take profit", 3305, "take profit hit"}, {"stop loss", 2985, "stop loss hit"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			e, _, v, px := paperSetup(t)
+			ctx := context.Background()
+			in := intent()
+			in.SizeUSD, in.Style, in.StopPrice, in.ProtectMode = 5, "stop", 3030, "separate"
+			in.TakeProfit, in.StopLoss = 3300, 2990
+			res := e.Propose(ctx, in)
+			if res.Trade == nil {
+				t.Fatalf("propose: %+v", res)
+			}
+			px.Store(3031.0)
+			v.Tick(ctx)
+			e.RefreshTrade(ctx, res.Trade.ID)
+			tr, _ := e.Store.Trade(res.Trade.ID)
+			if tr.BracketOrderID == "" || tr.TPOrderID == "" || strings.Count(steps(tr.Timeline), "protected") != 2 {
+				t.Fatalf("after fill: sl %q tp %q steps %s", tr.BracketOrderID, tr.TPOrderID, steps(tr.Timeline))
+			}
+			w, _ := e.Wallets.Get(tr.WalletID)
+			sl, _ := e.Flash.GetOrder(ctx, tr.BracketOrderID, w.Address())
+			tp, _ := e.Flash.GetOrder(ctx, tr.TPOrderID, w.Address())
+			if sl.OrderType != "stop-loss" || tp.OrderType != "take-profit" {
+				t.Fatalf("order types %s / %s", sl.OrderType, tp.OrderType)
+			}
+			px.Store(tc.exitPx)
+			v.Tick(ctx)
+			e.RefreshTrade(ctx, tr.ID)
+			tr, _ = e.Store.Trade(tr.ID)
+			if tr.Status != "closed" || tr.CloseReason != tc.reason {
+				t.Fatalf("exit: %s %q", tr.Status, tr.CloseReason)
+			}
+			sl, _ = e.Flash.GetOrder(ctx, tr.BracketOrderID, w.Address())
+			tp, _ = e.Flash.GetOrder(ctx, tr.TPOrderID, w.Address())
+			if !sl.Terminal() || !tp.Terminal() {
+				t.Fatalf("a sibling order is still live: sl %s tp %s", sl.Status, tp.Status)
+			}
+		})
+	}
+}
+
+func TestLimitEntryFillsOnlyAtItsPrice(t *testing.T) {
+	e, _, v, px := paperSetup(t)
+	ctx := context.Background()
+	in := intent()
+	in.SizeUSD, in.Style, in.EntryLimit = 5, "limit", 2940
+	in.TakeProfit, in.StopLoss = 3030, 2900
+	res := e.Propose(ctx, in)
+	if res.Trade == nil || res.Trade.OrderType != "limit+bracket" {
+		t.Fatalf("limit: %+v", res)
+	}
+	v.Tick(ctx) // 3000: above the limit
+	e.RefreshTrade(ctx, res.Trade.ID)
+	if tr, _ := e.Store.Trade(res.Trade.ID); tr.Status != "placed" {
+		t.Fatalf("limit filled above its price: %s", tr.Status)
+	}
+	px.Store(2939.0)
+	v.Tick(ctx)
+	e.RefreshTrade(ctx, res.Trade.ID)
+	e.RefreshTrade(ctx, res.Trade.ID)
+	tr, _ := e.Store.Trade(res.Trade.ID)
+	if tr.Status != "filled" || tr.BracketOrderID == "" || tr.FillPrice > 2940 {
+		t.Fatalf("limit fill: %s bracket %q fill %v", tr.Status, tr.BracketOrderID, tr.FillPrice)
+	}
+}
+
+func TestTWAPCancelledMidwayKeepsWhatFilled(t *testing.T) {
+	e, _, v, _ := paperSetup(t)
+	ctx := context.Background()
+	in := intent()
+	in.SizeUSD, in.Style, in.TwapMinutes = 5, "twap", 10
+	res := e.Propose(ctx, in)
+	if res.Trade == nil {
+		t.Fatalf("twap: %+v", res)
+	}
+	v.Advance(150 * time.Second) // 3 of 10 slices due
+	v.Tick(ctx)
+	w, _ := e.Wallets.Get(res.Trade.WalletID)
+	if err := e.Exec.Cancel(ctx, w, res.Trade.OrderID); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	e.RefreshTrade(ctx, res.Trade.ID)
+	tr, _ := e.Store.Trade(res.Trade.ID)
+	if tr.Status != "filled" || tr.USDCSpent < 1.4 || tr.USDCSpent > 1.6 || tr.BracketOrderID == "" {
+		t.Fatalf("partial twap: %s spent %v bracket %q (want 3 of 10 slices of $5)", tr.Status, tr.USDCSpent, tr.BracketOrderID)
+	}
+}

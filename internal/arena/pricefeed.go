@@ -118,28 +118,40 @@ func (p *PriceFeed) tick(ctx context.Context) {
 		return
 	}
 	p.push(px)
-	// Search meta every 15 min (it may become eligible later).
+	// Liquidity: the pool TVL first (the fallback must not starve), then Flash
+	// /search every 15 min (it may become eligible later; on success it takes
+	// over). Each call gets its own timeout: a slow DNS lookup for Flash used to
+	// eat the shared one and leave liquidity at $0.
+	tvl := func() {
+		p.mu.RLock()
+		need := p.liqSource != "flash-search" && time.Since(p.tvlAt) > 5*time.Minute
+		p.mu.RUnlock()
+		if !need {
+			return
+		}
+		tctx, tcancel := context.WithTimeout(ctx, 10*time.Second)
+		v, err := p.pool.TVL(tctx, px)
+		tcancel()
+		if err != nil {
+			p.log.Warn("pool TVL", "err", err)
+			return
+		}
+		p.mu.Lock()
+		if p.liqSource != "flash-search" {
+			p.liquidity, p.liqSource = v, "pool-tvl"
+		}
+		p.tvlAt = time.Now()
+		p.mu.Unlock()
+	}
+	tvl()
 	p.mu.RLock()
 	trySearch := time.Since(p.searchAt) > 15*time.Minute
-	needTVL := time.Since(p.tvlAt) > 5*time.Minute
 	p.mu.RUnlock()
 	if trySearch {
-		p.tickSearch(cctx, false)
-	}
-	p.mu.RLock()
-	useTVL := p.liqSource != "flash-search"
-	p.mu.RUnlock()
-	if useTVL && needTVL {
-		if tvl, err := p.pool.TVL(cctx, px); err == nil {
-			p.mu.Lock()
-			if p.liqSource != "flash-search" {
-				p.liquidity, p.liqSource = tvl, "pool-tvl"
-			}
-			p.tvlAt = time.Now()
-			p.mu.Unlock()
-		} else {
-			p.log.Warn("pool TVL", "err", err)
-		}
+		sctx, scancel := context.WithTimeout(ctx, 12*time.Second)
+		p.tickSearch(sctx, false)
+		scancel()
+		tvl() // search just stopped working: the pool TVL takes over now
 	}
 }
 

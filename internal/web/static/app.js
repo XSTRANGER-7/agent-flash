@@ -880,7 +880,8 @@ const KIND_LABEL = { agent: "Agent trade", copy: "Copy", invest: "Invested walle
 const STYLE = { market: "Market", limit: "Limit", twap: "DCA (TWAP)", stop: "Stop buy" };
 const styleLabel = (s) => STYLE[s || "market"] || cap(s);
 const styleChip = (s) => `<span class="mini mini-style">${esc(styleLabel(s))}</span>`;
-const protectLabel = (t) => (t.protectMode === "trailing" ? `Trailing stop ${fixed(t.trailPct, 1)}%` : t.orderType === "stop+protect" ? "Bracket after fill" : "Bracket attached");
+const protectLabel = (t) => (t.protectMode === "trailing" ? `Trailing stop ${fixed(t.trailPct, 1)}%` : t.protectMode === "separate" ? "Separate SL + TP orders" : t.orderType === "stop+protect" ? "Bracket after fill" : "Bracket attached");
+const protectShort = (mode, trail) => (mode === "trailing" ? `Trailing ${fixed(trail, 1)}%` : mode === "separate" ? "SL + TP orders" : "Bracket after fill");
 const tokenOf = (t) => t?.token || "WETH";
 // Coin amounts: tiny BTC-sized numbers keep 8 decimals.
 const amount = (v, sym) => { const n = num(v); if (!(n > 0)) return "—"; return (n < 0.01 ? n.toFixed(8) : n < 1 ? n.toFixed(6) : n.toFixed(4)) + (sym ? " " + sym : ""); };
@@ -1190,7 +1191,8 @@ function renderTrade(body, d) {
         <dl class="receipt">
           <div><dt>Approval</dt><dd>${approveText(t.approveTx)}</dd></div>
           <div><dt>Flash order</dt><dd class="mono">${t.orderId ? esc(short(t.orderId)) : "—"}</dd></div>
-          <div><dt>Bracket order</dt><dd class="mono">${t.bracketOrderId ? esc(short(t.bracketOrderId)) : "—"}</dd></div>
+          <div><dt>${t.tpOrderId ? "Stop loss order" : "Bracket order"}</dt><dd class="mono">${t.bracketOrderId ? esc(short(t.bracketOrderId)) : "—"}</dd></div>
+          ${t.tpOrderId ? `<div><dt>Take profit order</dt><dd class="mono">${esc(short(t.tpOrderId))}</dd></div>` : ""}
           <div><dt>Entry tx</dt><dd>${txLink(t.entryTx)}</dd></div>
           <div><dt>Exit tx</dt><dd>${txLink(t.exitTx)}</dd></div>
         </dl>
@@ -1854,7 +1856,7 @@ async function pagePlanNew(page) {
           <div data-ew="stop" hidden>${fld("stopPct", "Trigger above (%)", 'type="number" min="0.1" max="10" step="0.1" inputmode="decimal"', 0.5, "Buys on a breakout this far up")}</div>
         </div>
         <div data-ew="stop" hidden><div class="field field-gap"><span class="label">Protection after the fill</span><div class="seg" role="radiogroup" aria-label="Protection">
-          <label><input type="radio" name="protect" value="bracket" checked><span>Bracket</span></label><label><input type="radio" name="protect" value="trailing"><span>Trailing stop</span></label></div></div></div>
+          <label><input type="radio" name="protect" value="bracket" checked><span>Bracket</span></label><label><input type="radio" name="protect" value="trailing"><span>Trailing</span></label><label><input type="radio" name="protect" value="separate"><span>SL + TP</span></label></div></div></div>
         <div data-ew="trail" hidden>${fld("trailPct", "Trail (%)", 'type="number" min="0.5" max="20" step="0.1" inputmode="decimal"', 2, "Sells after this pullback from the high", "field-gap")}</div>
       </fieldset>
       <fieldset class="step"><legend><span class="step-n">4</span>Money</legend>
@@ -1952,7 +1954,7 @@ async function pagePlanNew(page) {
       <p class="summary-line">Buys <b class="num">${esc(usd(v.tradeUsd))}</b> of <b>${esc(v.token)}</b> ${esc(brain)}.</p>
       <ul class="sum-list num">
         <li><span>Entry</span><b>${esc(styleLabel(v.style))} · ${esc(entryTxt)}</b></li>
-        ${v.style === "stop" ? `<li><span>Protection</span><b>${v.protect === "trailing" ? `Trailing ${esc(fixed(v.trailPct, 1))}%` : "Bracket after fill"}</b></li>` : ""}
+        ${v.style === "stop" ? `<li><span>Protection</span><b>${esc(protectShort(v.protect, v.trailPct))}</b></li>` : ""}
         <li><span>Sells at</span><b><span class="up">+${esc(fixed(v.takeProfitPct, 1))}%</span> or <span class="down">−${esc(fixed(v.stopLossPct, 1))}%</span></b></li>
         <li><span>Trades a day</span><b>up to ${esc(Number.isFinite(v.maxTradesPerDay) ? v.maxTradesPerDay : "—")}</b></li>
         <li><span>Stops after losing</span><b>${esc(usd(stopAt))}</b></li>
@@ -2074,7 +2076,7 @@ function renderPlan(body, d, refresh) {
         <dl class="spec spec-tight">
           <div><dt>Coin</dt><dd>${esc(p.token)}${+p.price > 0 ? ` · ${esc(price(p.price))}` : ""}</dd></div>
           <div><dt>Brain</dt><dd>${esc(stratLabel(p.strategy))}${p.strategy === "interval" ? ` · every ${esc(p.intervalMin)} min` : ""}</dd></div>
-          <div><dt>Entry</dt><dd>${esc(styleLabel(p.style))}${p.style === "limit" ? ` · ${esc(p.limitPct)}% below` : p.style === "twap" ? ` · ${esc(p.twapMinutes)} min` : p.style === "stop" ? ` · ${esc(p.stopPct)}% above` : ""}${p.style === "stop" ? ` · ${p.protect === "trailing" ? `trailing ${esc(p.trailPct)}%` : "bracket after fill"}` : ""}</dd></div>
+          <div><dt>Entry</dt><dd>${esc(styleLabel(p.style))}${p.style === "limit" ? ` · ${esc(p.limitPct)}% below` : p.style === "twap" ? ` · ${esc(p.twapMinutes)} min` : p.style === "stop" ? ` · ${esc(p.stopPct)}% above` : ""}${p.style === "stop" ? ` · ${esc(protectShort(p.protect, p.trailPct).toLowerCase())}` : ""}</dd></div>
           <div><dt>Per trade</dt><dd>${esc(usd(p.tradeUsd))}</dd></div>
           <div><dt>Budget</dt><dd>${esc(usd(p.budgetUsd))}</dd></div>
           <div><dt>Take profit</dt><dd class="up">+${esc(p.takeProfitPct)}%</dd></div>
@@ -2624,7 +2626,7 @@ function ticketHTML(wallets, preset, tokens) {
       <div class="field" data-when="stop" hidden><label>Trigger above (%)<input name="stopPct" type="number" min="0.1" max="10" step="0.1" value="0.5" inputmode="decimal"></label><span class="hint">Buys on a breakout this far up</span></div>
     </div>
     <div class="field field-gap" data-when="stop" hidden><span class="label">Protection after the fill</span><div class="seg" role="radiogroup" aria-label="Protection">
-      <label><input type="radio" name="protect" value="bracket" checked><span>Bracket</span></label><label><input type="radio" name="protect" value="trailing"><span>Trailing stop</span></label></div></div>
+      <label><input type="radio" name="protect" value="bracket" checked><span>Bracket</span></label><label><input type="radio" name="protect" value="trailing"><span>Trailing</span></label><label><input type="radio" name="protect" value="separate"><span>SL + TP</span></label></div></div>
     <div class="form-grid form-4" data-when="trail" hidden><div class="field"><label>Trail (%)<input name="trailPct" type="number" min="0.5" max="20" step="0.1" value="2" inputmode="decimal"></label><span class="hint">Sells after this pullback from the high</span></div></div>
     <p class="ticket-preview num" data-preview aria-live="polite"></p>
     <div class="btn-row sheet-cta"><button class="btn btn-primary btn-block" type="submit">Place order</button></div>
@@ -2635,9 +2637,11 @@ function wireTicket(form) {
   liveNumbers(form);
   const read = () => {
     const f = new FormData(form), n = (k) => num(f.get(k));
-    return { walletId: f.get("walletId"), token: f.get("token"), style: f.get("style") || "market", sizeUsd: n("sizeUsd"),
+    const style = f.get("style") || "market", protect = style === "stop" ? f.get("protect") || "bracket" : "bracket";
+    return { walletId: f.get("walletId"), token: f.get("token"), style, sizeUsd: n("sizeUsd"),
       takeProfitPct: n("takeProfitPct"), stopLossPct: n("stopLossPct"), maxSlippagePct: n("maxSlippagePct"), limitPct: n("limitPct"),
-      twapMinutes: Math.round(n("twapMinutes")), stopPct: n("stopPct"), protect: f.get("protect") || "bracket", trailPct: n("trailPct") };
+      // Protection choices apply to stop buys only; the other styles get Flash's attached bracket.
+      twapMinutes: Math.round(n("twapMinutes")), stopPct: n("stopPct"), protect, trailPct: protect === "trailing" ? n("trailPct") : 0 };
   };
   // Known balance of the chosen wallet, to warn before a too-big order.
   const balance = () => {
@@ -2778,7 +2782,7 @@ const DOCS = [
     <tr><td><b>Stop buy</b></td><td>Buy on a breakout above a level.</td></tr>
     <tr><td><b>Bracket</b></td><td>Standalone TP + SL on a held coin (after a stop buy fills).</td></tr>
     <tr><td><b>Trailing stop</b></td><td>Follows the high; sells on a set % pullback.</td></tr>
-    <tr><td><b>Stop loss / Take profit</b></td><td>Single-trigger exits; break-even stop moves the SL up.</td></tr></tbody></table>`],
+    <tr><td><b>Stop loss / Take profit</b></td><td>Two separate exit orders after a stop buy; when one fills, the other is cancelled.</td></tr></tbody></table>`],
   ["wallet", "Your own wallet", `<p>Connect any EOA or embedded wallet. The arena returns Flash's exact order; your wallet signs it (EIP-712) and sends capped approvals. No key ever reaches the server.</p>`],
   ["subwallets", "Sub-wallets & limits", `<ul><li>One wallet per agent, person and plan.</li><li>Pause, loss limit (auto-pause), daily cap.</li><li>Withdraw only to a locked payout address. Revoke Flash allowances onchain.</li></ul>`],
   ["safety", "Safety", `<ul><li>Referee: stop loss required, size and position caps, daily limit, one position per wallet, liquidity and risk flags.</li><li>Never blind-sign: chain, contract, vault, tokens, amount and deadline checked.</li><li>Capped approvals; Permit2 refused.</li><li>Price and cost guards; circuit breaker; emergency stop; live budget cap.</li></ul>`],

@@ -152,8 +152,10 @@ func (s *Server) planCreate(w http.ResponseWriter, r *http.Request) {
 		fail("stop buy must trigger 0.1%-10% above the price")
 	case in.Style == "twap" && (in.TwapMinutes < 5 || in.TwapMinutes > 1440):
 		fail("DCA / TWAP must run 5-1440 minutes")
-	case in.Protect == "trailing" && in.Style != "stop":
-		fail("trailing stop protection is for stop buys")
+	case (in.Protect == "trailing" || in.Protect == "separate") && in.Style != "stop":
+		fail("trailing stop / separate stop-loss + take-profit protection is for stop buys")
+	case in.Protect != "" && in.Protect != "bracket" && in.Protect != "trailing" && in.Protect != "separate":
+		fail("protection must be bracket, trailing or separate")
 	case in.Protect == "trailing" && (in.TrailPct < 0.5 || in.TrailPct > 20):
 		fail("trailing stop must be 0.5%-20%")
 	default:

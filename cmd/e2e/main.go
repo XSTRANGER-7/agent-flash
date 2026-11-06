@@ -71,7 +71,7 @@ func main() {
 	automation()
 	section("7. Emergency stop and withdrawals")
 	safetyOps(w, "follower2")
-	section("8. Flash advanced order types (limit, DCA/TWAP, stop buy, trailing)")
+	section("8. Flash advanced order types (limit, DCA/TWAP, stop buy, trailing, SL + TP)")
 	orderTypes()
 	section("9. Social: share cards, signals, RSS, fees")
 	social()
@@ -588,6 +588,13 @@ func orderTypes() {
 	check("rejects trailing on a market entry", code == 422 && s(r, "decision", "code") == "ORDER_TYPE", s(r, "decision", "reason"))
 	code, r = ticket(M{"walletId": w3, "style": "twap", "sizeUsd": 20, "twapMinutes": 2})
 	check("rejects DCA shorter than 5 minutes", code == 422, s(r, "decision", "reason"))
+	w4 := freshWallet("SLTP")
+	code, r = ticket(M{"walletId": w4, "style": "stop", "sizeUsd": 20, "stopPct": 1.5, "takeProfitPct": 3, "stopLossPct": 1, "protect": "separate"})
+	sp, _ := r["trade"].(M)
+	check("stop buy with separate SL + TP placed", code == 200 && sp != nil && s(sp, "orderType") == "stop+protect" && s(sp, "protectMode") == "separate",
+		fmt.Sprintf("HTTP %d %s %s", code, s(r, "decision", "reason"), s(r, "error")))
+	code, r = ticket(M{"walletId": w4, "style": "market", "sizeUsd": 20, "protect": "separate"})
+	check("rejects separate SL + TP on a market entry", code == 422 && s(r, "decision", "code") == "ORDER_TYPE", s(r, "decision", "reason"))
 }
 
 // --- 9 -----------------------------------------------------------------------

@@ -85,6 +85,13 @@ func normalizeStyle(in *referee.Intent) error {
 		if in.TrailPct < 0.5 || in.TrailPct > 50 {
 			return errors.New("trailing stop distance must be 0.5%-50%")
 		}
+	case "separate":
+		// Two standalone Flash orders, a stop-loss and a take-profit, instead
+		// of one bracket. When one fills the engine cancels the other (Flash
+		// would also cancel it for lack of balance).
+		if in.Style != "stop" {
+			return errors.New("separate stop-loss / take-profit orders are for stop buys; the other styles get Flash's attached bracket")
+		}
 	default:
 		return fmt.Errorf("unknown protection %q", in.ProtectMode)
 	}
@@ -92,8 +99,9 @@ func normalizeStyle(in *referee.Intent) error {
 }
 
 // Protect places a protective sell on a held position, as its own Flash
-// order: a bracket (take profit + stop loss triggers) or a trailing stop.
-func (e *Executor) Protect(ctx context.Context, w *wallet.Wallet, tok config.Token, qty, tp, sl, trailPct float64) (*Placement, error) {
+// order. kind: "bracket" (take profit + stop loss triggers, one order),
+// "trailing" (trailing-stop), "stop-loss" or "take-profit" (one trigger each).
+func (e *Executor) Protect(ctx context.Context, w *wallet.Wallet, tok config.Token, qty float64, kind string, tp, sl, trailPct float64) (*Placement, error) {
 	l := e.lock(w.ID)
 	l.Lock()
 	defer l.Unlock()
@@ -104,14 +112,28 @@ func (e *Executor) Protect(ctx context.Context, w *wallet.Wallet, tok config.Tok
 	req := &flash.QuoteRequest{TargetChain: e.cfg.Chain, ContraChain: e.cfg.Chain, TargetAsset: tok.Address, ContraAsset: e.cfg.USDC,
 		Side: "sell", Qty: qs, FunderAddress: w.Address(), FlashIntegratorFeeBps: e.cfg.FeeBps, ForceMinimalAllowance: true, EVMUsePermit2: &no}
 	what := ""
-	if trailPct > 0 {
+	switch kind {
+	case "trailing":
+		if trailPct <= 0 {
+			return nil, errors.New("trailing stop needs a distance")
+		}
 		req.OrderType = "trailing-stop"
 		req.TrailingStop = &flash.TrailingStop{TrailPercent: strconv.FormatFloat(trailPct/100, 'f', -1, 64)}
 		what = fmt.Sprintf("trailing stop %.1f%% below the high", trailPct)
-	} else {
+	case "stop-loss":
+		req.OrderType = "stop-loss"
+		req.Triggers = []flash.Trigger{{NotionalPrice: fmtPrice(sl), TriggerType: "lower"}}
+		what = "stop loss at " + fmtPrice(sl)
+	case "take-profit":
+		req.OrderType = "take-profit"
+		req.Triggers = []flash.Trigger{{NotionalPrice: fmtPrice(tp), TriggerType: "upper"}}
+		what = "take profit at " + fmtPrice(tp)
+	case "bracket":
 		req.OrderType = "bracket"
 		req.Triggers = []flash.Trigger{{NotionalPrice: fmtPrice(sl), TriggerType: "lower"}, {NotionalPrice: fmtPrice(tp), TriggerType: "upper"}}
 		what = fmt.Sprintf("bracket TP %s / SL %s", fmtPrice(tp), fmtPrice(sl))
+	default:
+		return nil, fmt.Errorf("unknown protection %q", kind)
 	}
 	p := &Placement{DryRun: e.cfg.DryRun, Paper: e.cfg.Paper, TakeProfit: tp, StopLoss: sl}
 	q, err := e.quote(ctx, req)
@@ -162,21 +184,33 @@ func (e *Engine) protectAfterFill(tr store.Trade) {
 	if !ok || tr.WETHAmount <= 0 || tr.BracketOrderID != "" {
 		return
 	}
-	trail := 0.0
-	if tr.ProtectMode == "trailing" {
-		trail = tr.TrailPct
+	kind := "bracket"
+	switch tr.ProtectMode {
+	case "trailing":
+		kind = "trailing"
+	case "separate":
+		kind = "stop-loss" // the stop loss first: a position is never left without one
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	p, err := e.Exec.Protect(ctx, w, e.tradeToken(tr), tr.WETHAmount, tr.TakeProfit, tr.StopLoss, trail)
+	tok := e.tradeToken(tr)
+	p, err := e.Exec.Protect(ctx, w, tok, tr.WETHAmount, kind, tr.TakeProfit, tr.StopLoss, tr.TrailPct)
 	if err != nil {
 		e.Log.Warn("protection after fill failed", "trade", tr.ID, "err", err)
 		e.markUnprotected(tr, "", "placing its stop loss failed ("+shortErr(err)+")")
 		return
 	}
+	tpID, steps := "", p.Steps
+	if tr.ProtectMode == "separate" {
+		if tp, err := e.Exec.Protect(ctx, w, tok, tr.WETHAmount, "take-profit", tr.TakeProfit, tr.StopLoss, 0); err == nil {
+			tpID, steps = tp.OrderID, append(steps, tp.Steps...)
+		} else {
+			steps = append(steps, store.Step{At: time.Now().UTC(), Step: "take_profit_failed", Detail: "the take-profit order was not placed (" + shortErr(err) + "); the stop loss stays"})
+		}
+	}
 	t, ok := e.Store.UpdateTrade(tr.ID, func(x *store.Trade) {
-		x.BracketOrderID, x.Protection = p.OrderID, "active"
-		x.Timeline = append(x.Timeline, p.Steps...)
+		x.BracketOrderID, x.TPOrderID, x.Protection = p.OrderID, tpID, "active"
+		x.Timeline = append(x.Timeline, steps...)
 	})
 	if ok {
 		e.Feed.Publish(feed.Post{Kind: "trade_filled", AgentID: tr.AgentID, TradeID: tr.ID, Text: fmt.Sprintf("%s: stop buy filled; protection placed (%s)", e.label(*t), p.Steps[len(p.Steps)-1].Detail)})

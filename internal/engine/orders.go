@@ -234,8 +234,18 @@ func (e *Engine) followBracket(ctx context.Context, w *wallet.Wallet, tr store.T
 		e.paperGone(tr, err)
 		return
 	}
+	if tr.TPOrderID != "" { // separate mode: a standalone take-profit next to the stop-loss
+		if tpo, terr := e.Flash.GetOrder(ctx, tr.TPOrderID, w.Address()); terr == nil && tpo.Status == flash.StatusFilled {
+			e.cancelQuietly(ctx, w, tr.BracketOrderID) // the stop loss has nothing left to protect
+			e.closeFromExit(ctx, w, tr, tpo, false)
+			return
+		}
+	}
 	switch {
 	case b.Status == flash.StatusFilled:
+		if tr.TPOrderID != "" {
+			e.cancelQuietly(ctx, w, tr.TPOrderID)
+		}
 		e.closeFromExit(ctx, w, tr, b, false)
 	case b.Terminal():
 		if tr.Status != "unprotected" {
@@ -351,8 +361,8 @@ func (e *Engine) balanceFallback(ctx context.Context, w *wallet.Wallet, tr store
 // maybeMoveStop moves the stop to break-even once price is halfway from
 // break-even to the take profit (Flash PATCH /orders/{id}, both legs resent).
 func (e *Engine) maybeMoveStop(ctx context.Context, w *wallet.Wallet, tr store.Trade) {
-	if tr.ProtectMode == "trailing" {
-		return // a trailing stop moves itself
+	if tr.ProtectMode == "trailing" || tr.ProtectMode == "separate" {
+		return // a trailing stop moves itself; a lone stop-loss has no bracket legs to PATCH
 	}
 	if !e.Cfg.BreakEvenStop || tr.StopMoved || tr.BracketOrderID == "" || tr.BreakEvenPrice <= 0 || tr.StopLoss >= tr.BreakEvenPrice || tr.TakeProfit <= tr.BreakEvenPrice {
 		return
@@ -412,6 +422,9 @@ func (e *Engine) ExitPosition(ctx context.Context, id string) (*store.Trade, err
 	w, ok := e.Wallets.Get(tr.WalletID)
 	if !ok {
 		return nil, errors.New("wallet missing")
+	}
+	if tr.TPOrderID != "" && tr.Protection != "none" {
+		e.cancelQuietly(ctx, w, tr.TPOrderID) // separate mode: drop the take-profit first
 	}
 	if tr.BracketOrderID != "" && tr.Protection != "none" {
 		if err := e.Exec.Cancel(ctx, w, tr.BracketOrderID); err != nil {
@@ -529,4 +542,15 @@ func (e *Engine) paperGone(tr store.Trade, err error) bool {
 	}
 	e.closeTrade(tr, "terminated", "paper ledger was reset; this paper trade no longer exists", "", nil, nil)
 	return true
+}
+
+// cancelQuietly cancels a sibling order that can no longer fill usefully.
+// Errors are fine: Flash also cancels it once the funder lacks the balance.
+func (e *Engine) cancelQuietly(ctx context.Context, w *wallet.Wallet, orderID string) {
+	if orderID == "" {
+		return
+	}
+	if err := e.Exec.Cancel(ctx, w, orderID); err != nil {
+		e.Log.Debug("sibling cancel", "order", orderID, "err", err)
+	}
 }

@@ -287,3 +287,36 @@ func (r *Registry) Watch(addr string) (*Wallet, error) {
 	r.byID[id] = w
 	return w, nil
 }
+
+// RemoveFromFile takes the given follower ids out of a wallets file. Their
+// keys are not deleted: they are written (synced) to backupPath first, so a
+// mistake can be undone. Agent wallets are never removed.
+func RemoveFromFile(path string, ids []string, backupPath string) (int, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	var f fileFormat
+	if err := json.Unmarshal(b, &f); err != nil {
+		return 0, err
+	}
+	removed := fileFormat{Agents: map[string]string{}, Followers: map[string]string{}}
+	for _, id := range ids {
+		if k, ok := f.Followers[id]; ok {
+			removed.Followers[id] = k
+			delete(f.Followers, id)
+		}
+	}
+	if len(removed.Followers) == 0 {
+		return 0, nil
+	}
+	rb, _ := json.MarshalIndent(removed, "", "  ")
+	if err := atomicfile.Write(backupPath, rb, 0o600); err != nil {
+		return 0, fmt.Errorf("backup of removed keys: %w", err)
+	}
+	out, _ := json.MarshalIndent(f, "", "  ")
+	if err := atomicfile.WriteInPlace(path, out, 0o600); err != nil {
+		return 0, err
+	}
+	return len(removed.Followers), nil
+}

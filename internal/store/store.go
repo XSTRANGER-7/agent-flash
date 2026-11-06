@@ -52,7 +52,8 @@ type Trade struct {
 	Style       string   `json:"style,omitempty"`
 	StopPrice   float64  `json:"stopPrice,omitempty"`   // stop buy trigger
 	TwapMinutes int      `json:"twapMinutes,omitempty"` // twap duration
-	ProtectMode string   `json:"protectMode,omitempty"` // bracket | trailing (stop buys get it after the fill)
+	ProtectMode string   `json:"protectMode,omitempty"` // bracket | trailing | separate (stop buys get it after the fill)
+	TPOrderID   string   `json:"tpOrderId,omitempty"`   // separate mode: the standalone take-profit order (BracketOrderID holds the stop-loss)
 	TrailPct    float64  `json:"trailPct,omitempty"`    // trailing stop distance
 	USDCBefore  float64  `json:"usdcBefore"`
 	PnLUSD      *float64 `json:"pnlUsd,omitempty"`      // realized, set when the position is sold

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"math/big"
 	"strings"
 	"time"
@@ -35,7 +36,7 @@ func simulate() error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	rpc := evm.NewRPC(cfg.RPCURL)
 	fc := flash.New(cfg.FlashBaseURL, cfg.FlashAPIKey, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -98,7 +99,7 @@ func simulate() error {
 		check("real Flash quote", false, fmt.Sprint(err))
 		return errors.New("no quote")
 	}
-	check("real Flash quote", true, fmt.Sprintf("quote %s · $5 buys %s WETH", q.QuoteID, q.To.Amount.String()))
+	check("real Flash quote", true, fmt.Sprintf("quote %s Â· $5 buys %s WETH", q.QuoteID, q.To.Amount.String()))
 
 	td, err := evm.ParseTypedData(q.EVM.OrderTypedData)
 	if err != nil {
@@ -201,10 +202,15 @@ func simulate() error {
 				_, err = rpc.SendRaw(ctx, rawTx)
 				msg := shortRPC(err)
 				ok := err != nil && strings.Contains(strings.ToLower(msg), "insufficient funds")
-				check("Base node accepts our tx encoding", ok, fmt.Sprintf("tx %s… → %s", hash[:12], msg))
+				check("Base node accepts our tx encoding", ok, fmt.Sprintf("tx %sâ€¦ â†’ %s", hash[:12], msg))
 			}
 		}
 	}
+
+	// 8. Every Flash order type through the same /quote endpoint, each
+	// payload checked like the executor checks it before signing.
+	fmt.Println("  order types (real Flash quotes, same endpoint):")
+	orderTypeQuotes(ctx, cfg, fc, wallet, settlement, px, check)
 
 	if fails > 0 {
 		return fmt.Errorf("%d simulation check(s) failed", fails)
@@ -258,7 +264,125 @@ func shortRPC(err error) string {
 		s = s[i:]
 	}
 	if len(s) > 110 {
-		s = s[:110] + "…"
+		s = s[:110] + "â€¦"
 	}
 	return s
 }
+
+// orderTypeQuotes asks the real Flash API for every advanced order type
+// (same /quote endpoint) and checks each FlashOrder payload the way the
+// executor does before it signs: chain, contract, wallet, tokens, amount.
+func orderTypeQuotes(ctx context.Context, cfg *config.Config, fc *flash.Client, funder, settlement string, px float64, check func(string, bool, string)) {
+	if px <= 0 {
+		check("order types (no price)", false, "no reference price")
+		return
+	}
+	no := false
+	p2 := func(x float64) string { return fmt.Sprintf("%.2f", x) }
+	base := func(side, qty, typ string) *flash.QuoteRequest {
+		return &flash.QuoteRequest{TargetChain: cfg.Chain, ContraChain: cfg.Chain, TargetAsset: cfg.WETH, ContraAsset: cfg.USDC, Side: side, Qty: qty,
+			OrderType: typ, FunderAddress: funder, FlashIntegratorFeeBps: cfg.FeeBps, ForceMinimalAllowance: true, EVMUsePermit2: &no}
+	}
+	br := func() *flash.QuoteBracket {
+		return &flash.QuoteBracket{TakeProfit: &flash.BracketLeg{NotionalPrice: p2(px * 1.03)}, StopLoss: &flash.BracketLeg{NotionalPrice: p2(px * 0.98)},
+			ExpireTime: time.Now().Add(72 * time.Hour).UTC().Format(time.RFC3339)}
+	}
+	day := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
+	type tc struct {
+		name    string
+		req     *flash.QuoteRequest
+		bracket bool
+	}
+	var cases []tc
+	m := base("buy", "20", "market")
+	m.MaxSlippage, m.AttachedBracket = cfg.MaxSlippage, br()
+	cases = append(cases, tc{"Market + bracket (TP/SL)", m, true})
+	l := base("buy", "20", "limit")
+	l.LimitCrossPrice, l.ExpireTime, l.AttachedBracket = p2(px*0.98), day, br()
+	cases = append(cases, tc{"Limit buy + bracket", l, true})
+	tw := base("buy", "20", "twap")
+	tw.DurationSeconds, tw.TwapBucketCount, tw.AttachedBracket = 600, 10, br()
+	cases = append(cases, tc{"DCA / TWAP (10 slices) + bracket", tw, true})
+	sb := base("buy", "20", "stop")
+	sb.Triggers, sb.ExpireTime = []flash.Trigger{{NotionalPrice: p2(px * 1.01), TriggerType: "upper"}}, day
+	cases = append(cases, tc{"Stop buy", sb, false})
+	b := base("sell", "0.005", "bracket")
+	b.Triggers = []flash.Trigger{{NotionalPrice: p2(px * 0.98), TriggerType: "lower"}, {NotionalPrice: p2(px * 1.03), TriggerType: "upper"}}
+	cases = append(cases, tc{"Bracket (standalone sell)", b, false})
+	sl := base("sell", "0.005", "stop-loss")
+	sl.Triggers = []flash.Trigger{{NotionalPrice: p2(px * 0.98), TriggerType: "lower"}}
+	cases = append(cases, tc{"Stop loss (standalone sell)", sl, false})
+	tp := base("sell", "0.005", "take-profit")
+	tp.Triggers = []flash.Trigger{{NotionalPrice: p2(px * 1.03), TriggerType: "upper"}}
+	cases = append(cases, tc{"Take profit (standalone sell)", tp, false})
+	ts := base("sell", "0.005", "trailing-stop")
+	ts.TrailingStop = &flash.TrailingStop{TrailPercent: "0.02"}
+	cases = append(cases, tc{"Trailing stop (sell)", ts, false})
+
+	for _, c := range cases {
+		cctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+		q, err := fc.Quote(cctx, c.req)
+		cancel()
+		if err != nil {
+			check(c.name, false, shortRPC(err))
+			continue
+		}
+		from, to, dec := cfg.USDC, cfg.WETH, 6
+		if c.req.Side == "sell" {
+			from, to, dec = cfg.WETH, cfg.USDC, 18
+		}
+		problem := checkFlashOrder(q.EVM, funder, settlement, from, to, c.req.Qty, dec, cfg.ChainID)
+		if problem == "" && c.bracket {
+			if q.AttachedBracket == nil || q.AttachedBracket.EVM == nil {
+				problem = "no attached bracket payload"
+			} else if td, err := evm.ParseTypedData(q.AttachedBracket.EVM.OrderTypedData); err != nil || td.PrimaryType != "FlashOrder" ||
+				!strings.EqualFold(fmt.Sprint(td.Message["fromToken"]), cfg.WETH) || !strings.EqualFold(fmt.Sprint(td.Message["swapper"]), funder) {
+				problem = "bracket payload is not a WETH sell from this wallet"
+			}
+		}
+		detail := "FlashOrder ok: " + q.OrderType
+		if c.bracket {
+			detail += " + bracket"
+		}
+		if problem != "" {
+			detail = problem
+		}
+		check(c.name, problem == "", detail)
+	}
+}
+
+// checkFlashOrder mirrors the executor's never-blind-sign checks.
+func checkFlashOrder(x *flash.EVMBlock, funder, settlement, from, to, qty string, dec int, chain int64) string {
+	if x == nil || x.OrderTypedData == "" {
+		return "no FlashOrder payload"
+	}
+	td, err := evm.ParseTypedData(x.OrderTypedData)
+	if err != nil {
+		return err.Error()
+	}
+	cid, _ := evm.ToBigInt(td.Domain["chainId"])
+	vc, _ := td.Domain["verifyingContract"].(string)
+	str := func(k string) string { s, _ := td.Message[k].(string); return s }
+	amt, _ := evm.ToBigInt(td.Message["fromAmount"])
+	want, _ := new(big.Float).Mul(mustFloat(qty), new(big.Float).SetFloat64(math.Pow10(dec))).Int(nil)
+	dl, _ := evm.ToBigInt(td.Message["deadline"])
+	switch {
+	case td.PrimaryType != "FlashOrder":
+		return "primaryType " + td.PrimaryType
+	case cid == nil || cid.Int64() != chain:
+		return "wrong chain"
+	case !strings.EqualFold(vc, settlement):
+		return "verifyingContract is not the settlement contract"
+	case !strings.EqualFold(str("swapper"), funder) || !strings.EqualFold(str("recipient"), funder):
+		return "swapper/recipient is not this wallet"
+	case !strings.EqualFold(str("fromToken"), from) || !strings.EqualFold(str("toToken"), to):
+		return "wrong tokens"
+	case amt == nil || new(big.Int).Sub(amt, want).CmpAbs(big.NewInt(1)) > 0:
+		return fmt.Sprintf("amount %v, expected %v", amt, want)
+	case dl == nil || dl.Int64() <= time.Now().Unix():
+		return "deadline in the past"
+	}
+	return ""
+}
+
+func mustFloat(s string) *big.Float { f, _ := new(big.Float).SetString(s); return f }

@@ -78,6 +78,8 @@ func main() {
 		err = payout(os.Args[2:])
 	case "reset-paper":
 		err = resetPaper()
+	case "prune-test-wallets":
+		err = pruneTestWallets(os.Args[2:])
 	case "simulate":
 		err = simulate()
 	default:
@@ -93,6 +95,7 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, "  simulate                          onchain checks on real Base state with test money (nothing broadcast)")
 	fmt.Fprintln(os.Stderr, "  reset-paper                       start paper money over (old paper data is kept in a backup folder)")
+	fmt.Fprintln(os.Stderr, "  prune-test-wallets [-dry]         remove EMPTY wallets left by e2e runs (keys kept in a backup file)")
 	fmt.Fprintln(os.Stderr, "  payout   -wallet <id> -to 0x...   lock where a sub-wallet's withdrawals go (server stopped)")
 	fmt.Fprintln(os.Stderr, "usage: arena <keygen|doctor|wallets|price|smoke|serve> [flags]")
 }
@@ -187,8 +190,11 @@ func doctor(log *slog.Logger) error {
 	}
 
 	rpc := evm.NewRPC(cfg.RPCURL)
-	if id, err := rpc.ChainID(ctx); err != nil {
-		bad("base rpc", err)
+	// Networks blip (a DNS miss, a slow handshake): retry before calling it broken.
+	var id int64
+	err = retry(ctx, 3, func(c context.Context) (e error) { id, e = rpc.ChainID(c); return })
+	if err != nil {
+		bad("base rpc", fmt.Errorf("%w (tried 3 times; check your internet or RPC_URL)", err))
 	} else if id != cfg.ChainID {
 		bad("base rpc", fmt.Errorf("chain id %d, expected %d", id, cfg.ChainID))
 	} else {
@@ -211,14 +217,15 @@ func doctor(log *slog.Logger) error {
 	}
 	switch {
 	case st.SearchEligible == nil:
-		warn("flash /search", "not checked")
+		warn("flash /search", "no answer in time (slow network/DNS?); the server retries every 15 min and uses the pool TVL meanwhile")
 	case *st.SearchEligible:
 		ok("flash /search", "enabled for this key (liquidity + risk flag from Flash)")
 	default:
 		warn("flash /search", "SEARCH_NOT_ELIGIBLE for this key; using onchain pool TVL. Ask Definitive for access to get the risk flag.")
 	}
 
-	if mark, cost, err := quoteMark(ctx, cfg, fc); err != nil {
+	var mark, cost float64
+	if err := retry(ctx, 3, func(c context.Context) (e error) { mark, cost, e = quoteMark(c, cfg, fc); return }); err != nil {
 		bad("flash key + quote", err)
 	} else {
 		d := ""
@@ -251,33 +258,7 @@ func doctor(log *slog.Logger) error {
 	if err != nil {
 		bad("wallets", err)
 	} else {
-		need := cfg.MaxTradeUSD
-		for _, w := range ws.List("") {
-			bals, err := fc.Balances(ctx, w.Address())
-			if err != nil {
-				bad("wallet "+w.ID, err)
-				continue
-			}
-			usdc, weth := flash.BalanceOf(bals, cfg.Chain, cfg.USDC), flash.BalanceOf(bals, cfg.Chain, cfg.WETH)
-			eth := 0.0
-			if b, err := rpc.ETHBalance(ctx, w.Address()); err == nil {
-				eth, _ = new(big.Float).Quo(new(big.Float).SetInt(b), big.NewFloat(1e18)).Float64()
-			}
-			line := fmt.Sprintf("%s  USDC %.2f  WETH %.6f  ETH %.5f", w.Address(), usdc, weth, eth)
-			maxTrade := math.Min(need, usdc*cfg.MaxPositionPct/100)
-			switch {
-			case cfg.Paper:
-				ok("wallet "+w.ID, line+"  (onchain; paper mode trades mock USDC)")
-			case usdc <= 0 && eth <= 0:
-				warn("wallet "+w.ID, line+"  (not funded)")
-			case eth < 0.00005:
-				warn("wallet "+w.ID, line+"  (needs a little ETH for approvals)")
-			case maxTrade < 1:
-				warn("wallet "+w.ID, line+fmt.Sprintf("  (largest trade $%.2f; Flash orders under $1 cost a lot in %%)", maxTrade))
-			default:
-				ok("wallet "+w.ID, line)
-			}
-		}
+		doctorWallets(ctx, cfg, fc, rpc, ws.List(""), ok, warn)
 	}
 	if fails > 0 {
 		return fmt.Errorf("%d check(s) failed", fails)

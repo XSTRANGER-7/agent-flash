@@ -17,7 +17,7 @@ its Flash payload is checked field by field.
 
 | Area | What you get |
 | --- | --- |
-| **Flash advanced orders** | Market + attached bracket (TP/SL), **Limit**, **DCA / TWAP** (one slice a minute, bracket attached), **Stop buy** with protection placed after the fill: a standalone **Bracket** or a **Trailing stop**. Stop moves to break-even (PATCH), batch cancel, streaming quotes. All go through the same `/quote` and `/order` endpoints. |
+| **Flash advanced orders** | Market + attached bracket (TP/SL), **Limit**, **DCA / TWAP** (one slice a minute, bracket attached), **Stop buy** with protection placed after the fill: a standalone **Bracket**, a **Trailing stop**, or separate **Stop loss** + **Take profit** orders (when one fills, the other is cancelled). Stop moves to break-even (PATCH), batch cancel, streaming quotes. All go through the same `/quote` and `/order` endpoints. |
 | **AI agents** | TrendHunter, DipBuyer and Contrarian Kaka trade on their own signals. Ranked by Arena Score (return − ½ × worst drawdown); deposits and withdrawals never count as returns. |
 | **Copy trading** | Mirror an agent from your own sub-wallet with share %, max per trade and a daily cap. Copies above the threshold wait for a human approval. |
 | **Invest with an agent** | The agent trades your sub-wallet directly on every signal. |
@@ -187,6 +187,10 @@ The binary reads `./.env` itself. Real environment variables win over it.
 Lock where a sub-wallet's withdrawals may go (server stopped):
 `./bin/arena payout -wallet trendhunter -to 0xYourOwnAddress`.
 
+Clean up test wallets (server stopped): `./bin/arena prune-test-wallets -dry`, then
+without `-dry`. It removes only `e2e-*` / `plan-e2e-*` wallets that are empty onchain
+(ETH and every token); their keys are kept in `wallets.json.removed-<time>`.
+
 ### Arkiv sidecar (optional)
 
 Get a free access key and testnet tGLM at https://hub.arkiv.network, then put
@@ -269,7 +273,7 @@ Admin (`Authorization: Bearer $ADMIN_TOKEN`):
 | POST | `/v1/admin/test-trade` | `{walletId}`: one TEST_TRADE_USD bracket order, never copied |
 | POST | `/v1/admin/emergency-stop`, `/v1/admin/resume` | halt + batch-cancel unfilled entries; resume |
 | POST | `/v1/admin/plans`, `/v1/admin/plans/{id}/{pause, resume, stop, check}` | auto-trade plans |
-| POST | `/v1/admin/orders` | order ticket: `{walletId, token, style: market / limit / twap / stop, sizeUsd, takeProfitPct, stopLossPct, limitPct, stopPct, twapMinutes, protect: bracket / trailing, trailPct}` |
+| POST | `/v1/admin/orders` | order ticket: `{walletId, token, style: market / limit / twap / stop, sizeUsd, takeProfitPct, stopLossPct, limitPct, stopPct, twapMinutes, protect: bracket / trailing / separate (stop buys only), trailPct}` |
 
 Demo trade:
 
@@ -328,10 +332,38 @@ docker run -d --name arena -p 8080:8080 \
 ## Tests
 
 ```bash
-go test ./...            # unit + integration (paper venue, plans, wallets, WebSocket)
+go test ./...            # unit + integration (paper venue, plans, wallets, every order type)
 ./bin/arena simulate     # onchain checks on REAL Base state with test money (nothing broadcast)
-go run ./cmd/e2e         # drives a running MODE=paper server through every feature (PASS/FAIL)
+go run ./cmd/e2e -base http://127.0.0.1:8091   # drives a MODE=paper server through every feature
 ```
+
+`cmd/e2e` creates fresh sub-wallets on every run. Point it at a throwaway server so
+your real `wallets.json` and `data/` stay clean:
+
+```powershell
+# Windows (PowerShell): throwaway paper server on :8091, then run e2e against it
+$t="$env:TEMP\arena-e2e"; New-Item -ItemType Directory -Force "$t\data" | Out-Null
+$env:WALLETS_FILE="$t\wallets.json"; .\bin\arena.exe keygen -followers follower1,follower2
+$env:MODE="paper"; $env:DATA_DIR="$t\data"; $env:HTTP_ADDR="127.0.0.1:8091"; .\bin\arena.exe serve
+go run ./cmd/e2e -base http://127.0.0.1:8091      # in a second terminal
+```
+
+```bash
+# macOS / Linux
+t=$(mktemp -d); WALLETS_FILE=$t/wallets.json ./bin/arena keygen -followers follower1,follower2
+MODE=paper WALLETS_FILE=$t/wallets.json DATA_DIR=$t/data HTTP_ADDR=127.0.0.1:8091 ./bin/arena serve &
+go run ./cmd/e2e -base http://127.0.0.1:8091
+```
+
+If e2e already ran against your main server, stop it and run `arena prune-test-wallets`.
+The "agents trade on their own signals" check needs the server up for ~5 minutes
+(price history); before that it is a SKIP, not a FAIL.
+
+`arena simulate` also asks the real Flash API for every order type through the same
+`/quote` endpoint (market + bracket, limit + bracket, DCA / TWAP + bracket, stop buy,
+standalone bracket, stop loss, take profit, trailing stop) and checks each FlashOrder
+payload the way the executor does before signing: chain, settlement contract, wallet,
+tokens, exact amount, deadline.
 
 `arena simulate` checks that our EIP-712 domain matches the live Flash settlement
 contract. It gives a fresh wallet test USDC through an `eth_call` state override, and
@@ -346,5 +378,9 @@ and withdrawals, and checks that no secrets appear in public data. Each run uses
 sub-wallets.
 
 Covers EIP-712 vectors, signing, tx encoding, strategies, the leaderboard
-formula, and end-to-end engine runs against a fake Flash server that verifies
-every signature (blocked intents never reach Flash; copies need approval).
+formula, and end-to-end engine runs against an in-process Flash test double that
+verifies every signature (blocked intents never reach Flash; copies need approval).
+Order-type edge cases covered: a limit does not fill above its price, a TWAP cancelled
+midway keeps the slices that filled, a stop buy waits for its trigger, separate SL / TP
+cancel each other when one fills, and invalid combinations (trailing or SL + TP on a
+market entry, DCA under 5 minutes) are refused before anything is signed.
