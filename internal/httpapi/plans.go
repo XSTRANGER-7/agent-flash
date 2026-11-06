@@ -13,6 +13,7 @@ import (
 	"github.com/vikram/agent-arena/internal/engine"
 	"github.com/vikram/agent-arena/internal/feed"
 	"github.com/vikram/agent-arena/internal/store"
+	"github.com/vikram/agent-arena/internal/wallet"
 )
 
 // tokens lists the coins a plan can trade and the strategies it can use.
@@ -95,6 +96,9 @@ func (s *Server) planCreate(w http.ResponseWriter, r *http.Request) {
 		TwapMinutes     int     `json:"twapMinutes"`
 		Protect         string  `json:"protect"`
 		TrailPct        float64 `json:"trailPct"`
+		// WalletID runs the plan on an existing account (its payout must be
+		// Payout) instead of a new, empty sub-wallet that needs its own funding.
+		WalletID string `json:"walletId"`
 	}
 	if err := decode(r, &in); err != nil {
 		writeErr(w, 400, err.Error())
@@ -163,23 +167,44 @@ func (s *Server) planCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	return
 ok:
-	for _, wl := range s.E.Wallets.List("") {
-		if strings.EqualFold(wl.Address(), in.Payout) {
-			fail("payout cannot be one of the arena's own sub-wallets")
+	if s.E.Wallets.IsArenaAddress(in.Payout) {
+		fail("payout cannot be one of the arena's own wallets")
+		return
+	}
+	var nw *wallet.Wallet
+	if in.WalletID != "" {
+		// An existing account: same owner (payout), not an agent, no other live plan.
+		ew, ok := s.E.Wallets.Get(in.WalletID)
+		prof, _ := s.E.Store.Profile(in.WalletID)
+		switch {
+		case !ok || ew.Role != wallet.RoleFollower:
+			fail("walletId must be one of your arena accounts")
+			return
+		case !strings.EqualFold(prof.Payout, in.Payout):
+			fail("that account pays out to another address")
 			return
 		}
-	}
-	b := make([]byte, 2)
-	_, _ = rand.Read(b)
-	wid := "plan-" + slug(in.Owner)
-	if len(wid) > 26 {
-		wid = wid[:26]
-	}
-	wid += "-" + hex.EncodeToString(b)
-	nw, err := s.E.Wallets.Create(wid)
-	if err != nil {
-		writeErr(w, 409, err.Error())
-		return
+		for _, op := range s.E.Store.Plans() {
+			if op.WalletID == ew.ID && (op.Status == "active" || op.Status == "paused") {
+				fail("this account already runs plan \"" + op.Name + "\"; stop it first")
+				return
+			}
+		}
+		nw = ew
+	} else {
+		b := make([]byte, 2)
+		_, _ = rand.Read(b)
+		wid := "plan-" + slug(in.Owner)
+		if len(wid) > 26 {
+			wid = wid[:26]
+		}
+		wid += "-" + hex.EncodeToString(b)
+		created, err := s.E.Wallets.Create(wid)
+		if err != nil {
+			writeErr(w, 409, err.Error())
+			return
+		}
+		nw = created
 	}
 	lossLimit := in.LossLimitPct
 	if lossLimit == 0 {
@@ -208,8 +233,7 @@ ok:
 		in.Owner, in.Name, tok.Symbol, in.Strategy, in.TradeUSD, in.TakeProfitPct, in.StopLossPct, humanDur(in.DurationHours))})
 	go s.E.StepPlan(context.WithoutCancel(r.Context()), p.ID) // first look right away
 	v, _ := s.planView(r.Context(), p, false)
-	writeJSON(w, 201, map[string]any{"plan": v,
-		"fund": fmt.Sprintf("Send USDC (and ~$0.30 of ETH for approvals) on the Base network to %s", nw.Address())})
+	writeJSON(w, 201, map[string]any{"plan": v, "fund": fundHint(s, nw.Address())})
 }
 
 func humanDur(h float64) string {

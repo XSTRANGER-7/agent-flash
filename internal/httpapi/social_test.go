@@ -3,6 +3,10 @@ package httpapi
 import (
 	"net/http/httptest"
 	"testing"
+
+	"github.com/vikram/agent-arena/internal/arena"
+	"github.com/vikram/agent-arena/internal/engine"
+	"github.com/vikram/agent-arena/internal/store"
 )
 
 func TestPublicBaseHonoursTheProxy(t *testing.T) {
@@ -14,6 +18,25 @@ func TestPublicBaseHonoursTheProxy(t *testing.T) {
 	}
 	if money(-1.5) != "-$1.50" || money(75616) != "$75616" {
 		t.Fatalf("money %s %s", money(-1.5), money(75616))
+	}
+}
+
+// A test trade on a person's account once showed "Copy of TrendHunter" on its
+// share card; the name must come from the trade's kind.
+func TestTradeNamesFollowTheKind(t *testing.T) {
+	s := &Server{E: &engine.Engine{Agents: map[string]arena.Profile{"trendhunter": {ID: "trendhunter", Name: "TrendHunter"}}}}
+	cases := map[string]store.Trade{
+		"TrendHunter":               {AgentID: "trendhunter", WalletID: "trendhunter", Kind: "agent"},
+		"Test trade":                {AgentID: "trendhunter", WalletID: "u-1", Kind: "test"},
+		"Manual order":              {AgentID: "trendhunter", WalletID: "u-1", Kind: "manual"},
+		"Own wallet":                {AgentID: "trendhunter", WalletID: "self-1", Kind: "self"},
+		"Invested with TrendHunter": {AgentID: "trendhunter", WalletID: "u-1", Kind: "invest"},
+		"Copy of TrendHunter":       {AgentID: "trendhunter", WalletID: "follower1", Kind: "copy", CopyOf: "trd_x"},
+	}
+	for want, tr := range cases {
+		if got := s.name(tr); got != want {
+			t.Fatalf("%+v: got %q, want %q", tr, got, want)
+		}
 	}
 }
 

@@ -69,6 +69,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /v1/me/pause", s.me(s.mePause))
 	m.HandleFunc("POST /v1/me/resume", s.me(s.mePause))
 	m.HandleFunc("POST /v1/me/withdraw", s.me(s.meWithdraw))
+	m.HandleFunc("POST /v1/me/plans", s.me(s.mePlan))
 	m.HandleFunc("GET /v1/gas", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, s.E.Exec.GasTankStatus(r.Context())) })
 	m.HandleFunc("GET /v1/approvals/{id}", s.approvalGet)
 	m.HandleFunc("POST /v1/predictions", s.predict)

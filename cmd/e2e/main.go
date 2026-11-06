@@ -792,6 +792,22 @@ func gaslessAccount() {
 	ok := c == 200 && len(fl) == 1 && s(fl[0], "agentId") == "trendhunter" && s(fl[0], "mode") == "invest"
 	check("invest with an agent from the account", ok, fmt.Sprintf("HTTP %d %s", c, errMsg(iv)))
 
+	// Your own auto-trader runs on the same account (no new wallet to fund).
+	plan := M{"name": "My auto-trader", "token": "WETH", "strategy": "interval", "intervalMin": 60, "tradeUsd": 5, "budgetUsd": 10,
+		"takeProfitPct": 2, "stopLossPct": 1, "durationHours": 1}
+	c, _ = meDo("POST", "/v1/me/plans", plan, tok)
+	check("one job per account: plan refused while investing", c == 409, fmt.Sprint("HTTP ", c))
+	meDo("POST", "/v1/me/stop", M{}, tok)
+	c, pl := meDo("POST", "/v1/me/plans", plan, tok)
+	accountID := s(me, "account", "id")
+	check("own auto-trader runs on the account", c == 201 && s(pl, "plan", "walletId") == accountID,
+		fmt.Sprintf("HTTP %d, plan wallet %s %s", c, s(pl, "plan", "walletId"), errMsg(pl)))
+	c, _ = meDo("POST", "/v1/me/invest", M{"agentId": "trendhunter", "mode": "invest"}, tok)
+	check("invest refused while the plan runs", c == 409, fmt.Sprint("HTTP ", c))
+	if id := s(pl, "plan", "id"); id != "" {
+		post("/v1/admin/plans/"+id+"/stop", nil)
+	}
+
 	stok, _ := signIn(stranger)
 	_, other := meDo("GET", "/v1/me", nil, stok)
 	check("another wallet cannot see or use it", path(other, "account") == nil, "stranger sees no account")

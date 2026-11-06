@@ -1132,9 +1132,12 @@ async function pageTrade(page, id) {
 
 function renderTrade(body, d) {
   const t = d.trade, plan = d.plan;
-  const name = plan?.name || state.board?.rows.find((r) => r.agentId === t.agentId)?.name || t.agentId || (t.planId ? "Auto-trade plan" : "Trade");
+  // Test and manual orders carry an agent id only for bookkeeping: name them by kind.
+  const ownKind = { test: "Test trade", manual: "Manual order", self: "Own wallet" }[t.kind];
+  const name = plan?.name || ownKind || state.board?.rows.find((r) => r.agentId === t.agentId)?.name || t.agentId || (t.planId ? "Auto-trade plan" : "Trade");
   const who = plan ? `<a class="link-quiet" href="#/plan/${enc(plan.id)}">${esc(plan.owner ? plan.owner + "'s plan · " : "Plan · ")}${esc(plan.name)}</a>`
     : t.planId ? `<a class="link-quiet" href="#/plan/${enc(t.planId)}">Auto-trade plan</a>`
+    : ownKind ? esc(ownKind)
     : t.agentId ? `<a class="link-quiet" href="#/agent/${enc(t.agentId)}">${esc(name)}</a>` : esc(name);
   const sym = tokenOf(t);
   const entry = num(t.fillPrice) > 0 ? +t.fillPrice : num(t.quotedPrice) > 0 ? +t.quotedPrice : +t.entry;

@@ -14,11 +14,14 @@ package httpapi
 // client can never change an amount or a destination.
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/big"
 	"net"
@@ -362,6 +365,10 @@ func (s *Server) meInvest(w http.ResponseWriter, r *http.Request, addr string) {
 		writeErr(w, 400, "unknown agent")
 		return
 	}
+	if p, busy := s.activePlan(wl.ID); busy {
+		writeErr(w, 409, "your account runs the plan \""+p.Name+"\"; stop it first (one job per account)")
+		return
+	}
 	if in.Mode == "" {
 		in.Mode = "invest"
 	}
@@ -388,6 +395,42 @@ func (s *Server) meInvest(w http.ResponseWriter, r *http.Request, addr string) {
 	p, _ := s.E.Store.Profile(wl.ID)
 	s.E.Feed.Publish(feed.Post{Kind: "follow", AgentID: in.AgentID, Text: fmt.Sprintf("%s %s %s (max $%.2f a trade, $%.2f a day)", p.Owner, verb, ag.Name, f.MaxPerTradeUSD, f.DailyCapUSD)})
 	writeJSON(w, 200, s.meView(r.Context(), addr))
+}
+
+// activePlan is the plan running on a wallet, if any.
+func (s *Server) activePlan(walletID string) (store.Plan, bool) {
+	for _, p := range s.E.Store.Plans() {
+		if p.WalletID == walletID && (p.Status == "active" || p.Status == "paused") {
+			return p, true
+		}
+	}
+	return store.Plan{}, false
+}
+
+// mePlan starts the person's own auto-trader on their account: same fields
+// as the plan builder; owner, payout and wallet are forced to the caller.
+func (s *Server) mePlan(w http.ResponseWriter, r *http.Request, addr string) {
+	wl, ok, err := s.myWallet(addr)
+	if err != nil || !ok {
+		writeErr(w, 409, "create your account first")
+		return
+	}
+	if len(s.E.Store.FollowsOf(wl.ID)) > 0 {
+		writeErr(w, 409, "your account is linked to an agent; stop that first (one job per account)")
+		return
+	}
+	var in map[string]any
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&in); err != nil {
+		writeErr(w, 400, "bad plan")
+		return
+	}
+	in["owner"] = addr[:6] + "…" + addr[len(addr)-4:]
+	in["payout"] = addr
+	in["walletId"] = wl.ID
+	b, _ := json.Marshal(in)
+	r2 := r.Clone(r.Context())
+	r2.Body, r2.ContentLength = io.NopCloser(bytes.NewReader(b)), int64(len(b))
+	s.planCreate(w, r2)
 }
 
 // meStop unlinks the account from its agent. Open trades keep their TP / SL.

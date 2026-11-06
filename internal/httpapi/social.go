@@ -132,17 +132,31 @@ func styleWord(s string) string {
 	return "market buys"
 }
 
+// name says who made a trade, from its kind. Test and manual orders carry an
+// agent id only for bookkeeping, so they must never read "Copy of <agent>".
 func (s *Server) name(t store.Trade) string {
-	if p, ok := s.E.Agents[t.AgentID]; ok && t.WalletID == t.AgentID {
-		return p.Name
+	agent := ""
+	if p, ok := s.E.Agents[t.AgentID]; ok {
+		agent = p.Name
 	}
-	if t.PlanID != "" {
+	switch {
+	case agent != "" && t.WalletID == t.AgentID:
+		return agent
+	case t.PlanID != "":
 		if p, ok := s.E.Store.Plan(t.PlanID); ok {
 			return p.Owner + "'s " + p.Name
 		}
-	}
-	if p, ok := s.E.Agents[t.AgentID]; ok {
-		return "Copy of " + p.Name
+		return "Auto-trade plan"
+	case t.Kind == "test":
+		return "Test trade"
+	case t.Kind == "manual":
+		return "Manual order"
+	case t.Kind == "self":
+		return "Own wallet"
+	case t.Kind == "invest" && agent != "":
+		return "Invested with " + agent
+	case agent != "":
+		return "Copy of " + agent
 	}
 	return "Agent Arena"
 }
