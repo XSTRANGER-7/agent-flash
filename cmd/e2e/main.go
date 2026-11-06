@@ -919,6 +919,16 @@ func communityAgents() {
 	check("the agent trades its own signal with its rules", entry > 0 && math.Abs(f(own, "stopLoss")-entry*0.99) < entry*0.002 &&
 		f(own, "sizeUsd") > 0 && f(own, "sizeUsd") <= 0.25*acct*1.05+0.01,
 		fmt.Sprintf("$%.2f at %.2f, SL %.2f (%s)", f(own, "sizeUsd"), entry, f(own, "stopLoss"), s(own, "status")))
+	if inv == nil {
+		// The investor's order may be refused by the cost guard when Flash's
+		// fixed cost spikes at its small size: that is the guard working.
+		for _, p := range list(get("/v1/feed?limit=80"), "posts") {
+			if strings.Contains(s(p, "text"), fid) && strings.Contains(s(p, "text"), "cost guard") {
+				fmt.Printf("  SKIP  %-44s %s\n", "the investor's account trades the same signal", "its order was refused by the cost guard (Flash cost spike)")
+				return
+			}
+		}
+	}
 	check("the investor's account trades the same signal", inv != nil && s(inv, "agentId") == id,
 		fmt.Sprintf("%s $%.2f (%s)", s(inv, "walletId"), f(inv, "sizeUsd"), s(inv, "status")))
 }

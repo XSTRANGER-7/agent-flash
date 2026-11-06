@@ -137,7 +137,7 @@ async function api(path, { method = "GET", body, admin = false, me = false, time
   try { data = await res.json(); } catch { /* empty body */ }
   if (!res.ok) {
     if (res.status === 401 && me) {
-      store.del("arena.me", true);
+      dropSession(wallet.address);
       const err = new Error("Sign in with your wallet again.");
       err.status = 401;
       throw err;
@@ -2696,6 +2696,15 @@ eth()?.on?.("chainChanged", (id) => {
 });
 $("[data-wallet-btn]")?.addEventListener("click", () => { if (wallet.address) location.hash = "#/me"; else connectWallet(); });
 updateWalletChip();
+// The saved address is only a hint: show it only while the wallet still has
+// it connected (a locked or disconnected wallet shows "Connect" instead).
+(async () => {
+  if (!wallet.address) return;
+  if (!eth()) { setWallet(""); return; }
+  const accts = await eth().request({ method: "eth_accounts" }).catch(() => null);
+  if (accts && !accts.some((a) => a.toLowerCase() === wallet.address.toLowerCase())) setWallet(accts[0] || "");
+})();
+try { sessionStorage.removeItem("arena.me"); } catch { /* old per-tab session */ }
 
 async function waitReceipt(hash) {
   for (let i = 0; i < 90; i++) {
@@ -3049,10 +3058,19 @@ async function pageProof(page) {
 /* ---------------- arena account: USDC only, no gas ---------------- */
 // Sign in once (a free message signature), then the account, deposits (a free
 // USDC signature the arena's gas tank sends), investing and withdrawals. The
-// session lives in this tab only (sessionStorage) and belongs to one address.
+// session belongs to one address and lasts a week (the server keeps it
+// across restarts). One per wallet, so switching accounts needs no new sign-in.
+function sessions() { return store.get("arena.sessions", {}) || {}; }
 function meToken() {
-  const s = store.get("arena.me", null, true);
-  return s && wallet.address && s.addr?.toLowerCase() === wallet.address.toLowerCase() && Date.parse(s.exp) > Date.now() ? s.token : "";
+  if (!wallet.address) return "";
+  const s = sessions()[wallet.address.toLowerCase()];
+  return s && Date.parse(s.exp) > Date.now() ? s.token : "";
+}
+function dropSession(addr) {
+  if (!addr) return;
+  const all = sessions();
+  delete all[addr.toLowerCase()];
+  store.set("arena.sessions", all);
 }
 const utf8Hex = (s) => "0x" + [...new TextEncoder().encode(s)].map((b) => b.toString(16).padStart(2, "0")).join("");
 async function meSignIn() {
@@ -3061,7 +3079,10 @@ async function meSignIn() {
   const { message } = await api("/v1/me/nonce", { method: "POST", body: { address: addr } });
   const signature = await eth().request({ method: "personal_sign", params: [utf8Hex(message), addr] });
   const r = await api("/v1/me/login", { method: "POST", body: { address: addr, signature } });
-  store.set("arena.me", { addr: r.address, token: r.token, exp: r.expiresAt }, true);
+  const all = sessions();
+  for (const [k, v] of Object.entries(all)) if (!(Date.parse(v.exp) > Date.now())) delete all[k];
+  all[r.address.toLowerCase()] = { token: r.token, exp: r.expiresAt };
+  store.set("arena.sessions", all);
   return true;
 }
 
@@ -3112,7 +3133,8 @@ async function renderAccount(box, onChange) {
     return;
   }
   let d;
-  try { d = await api("/v1/me", { me: true }); } catch (err) { box.innerHTML = errorState(err); return; }
+  try { d = await api("/v1/me", { me: true }); }
+  catch (err) { if (err.status === 401) return renderAccount(box, onChange); box.innerHTML = errorState(err); return; }
   if (!state.board) await loadBoard().catch(() => null);
   box.innerHTML = accountHTML(d) + subWalletsHTML(d);
   const act = async (btn, label, fn) => {
@@ -3395,7 +3417,11 @@ async function pageMe(page) {
       return;
     }
     $("[data-me-trade]", page).addEventListener("click", () => walletTrade({}));
-    $("[data-me-off]", page).addEventListener("click", () => { setWallet(""); toast("Disconnected here. Your wallet keeps its funds.", "ok"); });
+    $("[data-me-off]", page).addEventListener("click", () => {
+      const addr = wallet.address;
+      if (meToken()) api("/v1/me/logout", { method: "POST", me: true, body: {} }).catch(() => {}).finally(() => dropSession(addr));
+      setWallet(""); toast("Signed out and disconnected here. Your wallet keeps its funds.", "ok");
+    });
     box.innerHTML = `<div class="skel skel-row"></div>`;
     let d;
     try { d = await api("/v1/wallet/" + enc(wallet.address)); } catch (err) { box.innerHTML = errorState(err); return; }

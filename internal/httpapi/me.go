@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -26,12 +27,14 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/vikram/agent-arena/internal/arena"
+	"github.com/vikram/agent-arena/internal/atomicfile"
 	"github.com/vikram/agent-arena/internal/engine"
 	"github.com/vikram/agent-arena/internal/evm"
 	"github.com/vikram/agent-arena/internal/feed"
@@ -40,8 +43,56 @@ import (
 )
 
 type userSession struct {
-	addr string
-	exp  time.Time
+	Addr string    `json:"addr"`
+	Exp  time.Time `json:"exp"`
+}
+
+// Sessions last a week and survive restarts: they are saved to
+// DATA_DIR/sessions.json, keyed by the SHA-256 of the token, so the file never
+// holds a token anyone could use.
+const sessionTTL = 7 * 24 * time.Hour
+
+func sessKey(tok string) string { h := sha256.Sum256([]byte(tok)); return hex.EncodeToString(h[:]) }
+
+// loadSessions reads saved sessions (expired ones are dropped).
+func (s *Server) loadSessions() {
+	b, _, err := atomicfile.Read(s.sessionsPath())
+	if err != nil {
+		return
+	}
+	var m map[string]userSession
+	if json.Unmarshal(b, &m) != nil {
+		return
+	}
+	users.Lock()
+	defer users.Unlock()
+	for k, v := range m {
+		if time.Now().Before(v.Exp) {
+			users.sessions[k] = v
+		}
+	}
+}
+
+// saveSessions writes the open sessions; call with users locked.
+func (s *Server) saveSessionsLocked() {
+	b, err := json.Marshal(users.sessions)
+	if err == nil {
+		err = atomicfile.Write(s.sessionsPath(), b, 0o600)
+	}
+	if err != nil && s.Log != nil {
+		s.Log.Warn("sessions not saved", "err", err)
+	}
+}
+
+func (s *Server) sessionsPath() string { return filepath.Join(s.E.Cfg.DataDir, "sessions.json") }
+
+// meLogout ends the caller's session.
+func (s *Server) meLogout(w http.ResponseWriter, r *http.Request, _ string) {
+	users.Lock()
+	delete(users.sessions, sessKey(r.Header.Get(sessionHeader)))
+	s.saveSessionsLocked()
+	users.Unlock()
+	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
 type pendingDeposit struct {
@@ -143,7 +194,7 @@ func (s *Server) meNonce(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"message": msg})
 }
 
-// meLogin checks the signed message (EIP-191) and opens a 12-hour session.
+// meLogin checks the signed message (EIP-191) and opens a 7-day session.
 func (s *Server) meLogin(w http.ResponseWriter, r *http.Request) {
 	if !allow("auth", r, 20, time.Minute) {
 		writeErr(w, 429, "too many sign-in attempts; wait a minute")
@@ -181,14 +232,15 @@ func (s *Server) meLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tok := "u_" + randHex(32)
-	exp := time.Now().Add(12 * time.Hour)
+	exp := time.Now().Add(sessionTTL)
 	users.Lock()
 	for k, v := range users.sessions {
-		if time.Now().After(v.exp) {
+		if time.Now().After(v.Exp) {
 			delete(users.sessions, k)
 		}
 	}
-	users.sessions[tok] = userSession{addr: addr, exp: exp}
+	users.sessions[sessKey(tok)] = userSession{Addr: addr, Exp: exp}
+	s.saveSessionsLocked()
 	users.Unlock()
 	writeJSON(w, 200, map[string]any{"token": tok, "address": addr, "expiresAt": exp.UTC()})
 }
@@ -198,13 +250,13 @@ func (s *Server) me(h func(http.ResponseWriter, *http.Request, string)) http.Han
 	return func(w http.ResponseWriter, r *http.Request) {
 		tok := r.Header.Get(sessionHeader)
 		users.Lock()
-		sess, ok := users.sessions[tok]
+		sess, ok := users.sessions[sessKey(tok)]
 		users.Unlock()
-		if tok == "" || !ok || time.Now().After(sess.exp) {
+		if tok == "" || !ok || time.Now().After(sess.Exp) {
 			writeErr(w, 401, "sign in with your wallet first")
 			return
 		}
-		h(w, r, sess.addr)
+		h(w, r, sess.Addr)
 	}
 }
 

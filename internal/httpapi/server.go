@@ -36,7 +36,11 @@ type Server struct {
 }
 
 func New(e *engine.Engine, log *slog.Logger) *Server {
-	return &Server{E: e, Log: log, start: time.Now()}
+	s := &Server{E: e, Log: log, start: time.Now()}
+	if e != nil && e.Cfg != nil {
+		s.loadSessions() // wallet sign-ins survive restarts
+	}
+	return s
 }
 
 func (s *Server) Handler() http.Handler {
@@ -64,6 +68,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /v1/me/login", s.meLogin)
 	m.HandleFunc("GET /v1/me", s.me(s.meGet))
 	m.HandleFunc("POST /v1/me/account", s.me(s.meAccount))
+	m.HandleFunc("POST /v1/me/logout", s.me(s.meLogout))
 	m.HandleFunc("POST /v1/me/deposit/prepare", s.me(s.meDepositPrepare))
 	m.HandleFunc("POST /v1/me/deposit", s.me(s.meDeposit))
 	m.HandleFunc("POST /v1/me/invest", s.me(s.meInvest))
