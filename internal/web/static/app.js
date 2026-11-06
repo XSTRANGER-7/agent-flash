@@ -669,6 +669,129 @@ const FAQ = [
   ["Which coins and chains?", "WETH and cbBTC on Base today. Flash itself supports 14 chains."],
 ];
 
+// "How a trade runs": an auto-playing story of one real trade, step by step,
+// each with its own animated illustration (inline SVG, CSS animations).
+const HOW = [
+  { ico: "spark", title: "Signal", line: "A strategy reads the onchain price every 15 seconds and decides to buy.",
+    points: ["Onchain price, every 15 s", "Your rules: dip, trend, pullback", "Backtested on real prices"],
+    art: `<svg viewBox="0 0 320 200" class="art"><path class="a-grid" d="M16 50H304M16 100H304M16 150H304"/>
+      <path class="a-line a-draw" pathLength="1" d="M16 78 L52 70 L86 88 L118 82 L150 104 L182 132 L214 118 L246 96 L280 76 L304 66"/>
+      <circle class="a-dot a-pop d1" cx="150" cy="104" r="5"/><circle class="a-dot a-pop d2" cx="182" cy="132" r="5"/>
+      <g class="a-pin a-pop d3"><circle cx="182" cy="132" r="17"/><text x="182" y="136" text-anchor="middle">BUY</text></g>
+      <text class="a-cap" x="16" y="190">2 falling checks → buy signal</text></svg>` },
+  { ico: "shield", title: "Referee", line: "Every order is checked before anything is signed. Anything off is blocked.",
+    points: ["Stop loss within 5%", "Size, daily and cost limits", "Price vs the Uniswap pool"],
+    art: `<svg viewBox="0 0 320 200" class="art"><path class="a-shield" d="M54 30 22 44v34c0 26 15 46 32 54 17-8 32-28 32-54V44z"/><path class="a-tick a-draw" pathLength="1" d="m40 82 10 10 20-22"/>
+      ${["Stop loss ≤ 5%", "Size & daily limit", "Exit liquidity", "Price vs Uniswap", "Flash cost ≤ limit"].map((t, i) => `<g class="a-row a-pop d${i + 1}"><rect x="112" y="${22 + i * 32}" width="190" height="24" rx="12"/><path class="a-ok" d="M${124} ${34 + i * 32} l5 5 9-9"/><text x="146" y="${38 + i * 32}">${t}</text></g>`).join("")}
+      <text class="a-cap" x="16" y="190">All pass → sign</text></svg>` },
+  { ico: "bolt", title: "Flash executes", line: "The order is checked field by field, signed (EIP-712) and sent to Definitive Flash with a bracket.",
+    points: ["Market, limit, TWAP or stop", "Take profit + stop loss attached", "Flash pays the gas"],
+    art: `<svg viewBox="0 0 320 200" class="art"><rect class="a-card" x="40" y="18" width="240" height="150" rx="18"/>
+      <text class="a-h" x="60" y="50">LONG WETH</text><text class="a-big" x="60" y="86">$3.00</text>
+      <g class="a-pop d1"><path class="a-tp" d="M60 110H260"/><text class="a-tpt" x="260" y="104" text-anchor="end">Take profit</text></g>
+      <g class="a-pop d2"><path class="a-sl" d="M60 146H260"/><text class="a-slt" x="260" y="140" text-anchor="end">Stop loss</text></g>
+      <g class="a-stamp a-pop d3"><rect x="186" y="30" width="80" height="26" rx="13"/><text x="226" y="48" text-anchor="middle">signed ✓</text></g>
+      <path class="a-bolt a-pop d4" d="M296 120 284 138h10l-4 18 14-22h-10z"/><text class="a-cap" x="16" y="190">FlashOrder · Base · gas included</text></svg>` },
+  { ico: "copy", title: "Followers copy", line: "Copiers and investors get the same trade in their own sub-wallets, within their own limits.",
+    points: ["Same coin, target and stop", "Your size and daily cap", "Big copies need a yes"],
+    art: `<svg viewBox="0 0 320 200" class="art">${[[70, 50, "$1.50"], [70, 150, "$5.00"], [250, 50, "$3.00"], [250, 150, "$2.50"]].map(([x, y, a], i) => `<path class="a-flow" d="M160 100 L${x} ${y}"/><g class="a-pop d${i + 1}"><circle class="a-node" cx="${x}" cy="${y}" r="24"/><text class="a-nt" x="${x}" y="${y + 4}" text-anchor="middle">${a}</text></g>`).join("")}
+      <circle class="a-hub" cx="160" cy="100" r="32"/><text class="a-ht" x="160" y="104" text-anchor="middle">Agent</text><text class="a-cap" x="16" y="196">One signal → every follower's own wallet</text></svg>` },
+  { ico: "chart", title: "Exit and proof", line: "The bracket closes the trade. Profit and loss come from Flash's fills, and every step links onchain.",
+    points: ["Exit by target, stop or you", "P&L from real fills", "Basescan link for every tx"],
+    art: `<svg viewBox="0 0 320 200" class="art"><path class="a-receipt" d="M80 14h160v172l-20-12-20 12-20-12-20 12-20-12-20 12-20-12-20 12z"/>
+      <text class="a-h" x="100" y="46">Trade closed</text><g class="a-pop d1"><text class="a-win" x="100" y="86">+ take profit</text></g>
+      <g class="a-pop d2"><text class="a-mono" x="100" y="116">tx 0x5d1d…c92c</text></g>
+      <g class="a-badge a-pop d3"><rect x="100" y="132" width="120" height="26" rx="13"/><text x="160" y="150" text-anchor="middle">Basescan ✓</text></g></svg>` },
+];
+
+function howHTML() {
+  return `<div class="how-wrap" data-how-wrap>
+    <div class="how-steps" role="tablist" aria-label="Steps of a trade">${HOW.map((s, i) => `<button type="button" role="tab" class="how-step" data-step="${i}" aria-selected="${i === 0}" aria-controls="how-stage"><span class="how-ico" aria-hidden="true">${ICON[s.ico]}</span><span class="how-n num">${i + 1}</span><span class="how-t">${esc(s.title)}</span><i class="how-bar" aria-hidden="true"></i></button>`).join("")}</div>
+    <div class="how-stage" id="how-stage" role="tabpanel" aria-live="polite" data-how-stage></div>
+  </div>`;
+}
+function howStageHTML(i) {
+  const s = HOW[i];
+  return `<div class="how-art" aria-hidden="true">${s.art}</div>
+    <div class="how-copy"><p class="eyebrow">Step ${i + 1} of ${HOW.length}</p><h3>${esc(s.title)}</h3><p>${esc(s.line)}</p>
+      <ul class="how-points">${s.points.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>
+      <div class="how-nav"><button type="button" class="btn btn-ghost btn-sm" data-how-prev aria-label="Previous step">‹</button><button type="button" class="btn btn-ghost btn-sm" data-how-next aria-label="Next step">›</button></div></div>`;
+}
+// Auto-plays (not with reduced motion), pauses on hover / focus / touch,
+// tap a step to jump, swipe the stage on phones. Returns a stop function.
+function wireHow(scope) {
+  const wrap = $("[data-how-wrap]", scope);
+  if (!wrap) return null;
+  const stage = $("[data-how-stage]", wrap), steps = $$(".how-step", wrap);
+  const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let i = 0, timer = 0, paused = false;
+  const show = (n, user) => {
+    i = (n + HOW.length) % HOW.length;
+    steps.forEach((b, k) => { b.setAttribute("aria-selected", String(k === i)); b.classList.toggle("is-done", k < i); });
+    stage.innerHTML = howStageHTML(i);
+    stage.classList.remove("is-in"); void stage.offsetWidth; stage.classList.add("is-in");
+    $("[data-how-prev]", stage).addEventListener("click", () => show(i - 1, true));
+    $("[data-how-next]", stage).addEventListener("click", () => show(i + 1, true));
+    steps[i].scrollIntoView({ block: "nearest", inline: "center", behavior: still ? "auto" : "smooth" });
+    if (user) restart();
+  };
+  const tick = () => { if (!paused && document.visibilityState === "visible") show(i + 1); };
+  const restart = () => {
+    clearInterval(timer);
+    wrap.classList.remove("is-playing"); void wrap.offsetWidth;
+    if (!still) { wrap.classList.add("is-playing"); timer = setInterval(() => { tick(); wrap.classList.remove("is-playing"); void wrap.offsetWidth; wrap.classList.add("is-playing"); }, 4500); }
+  };
+  steps.forEach((b, k) => b.addEventListener("click", () => show(k, true)));
+  wrap.addEventListener("pointerenter", () => { paused = true; wrap.classList.add("is-paused"); });
+  wrap.addEventListener("pointerleave", () => { paused = false; wrap.classList.remove("is-paused"); });
+  wrap.addEventListener("focusin", () => { paused = true; wrap.classList.add("is-paused"); });
+  wrap.addEventListener("focusout", () => { paused = false; wrap.classList.remove("is-paused"); });
+  let x0 = null;
+  stage.addEventListener("touchstart", (e) => { x0 = e.touches[0].clientX; paused = true; }, { passive: true });
+  stage.addEventListener("touchend", (e) => {
+    paused = false;
+    if (x0 == null) return;
+    const dx = e.changedTouches[0].clientX - x0; x0 = null;
+    if (Math.abs(dx) > 40) show(i + (dx < 0 ? 1 : -1), true);
+  });
+  show(0); restart();
+  return () => clearInterval(timer);
+}
+
+// "Built on real DeFi": Agent Arena in the middle, the protocols it uses
+// around it, with data flowing along the lines. Tap a node for its role.
+function orbitHTML() {
+  const W = 560, H = 380, cx = W / 2, cy = H / 2, rx = 210, ry = 140;
+  const pos = STACK.map((_, k) => { const a = -Math.PI / 2 + (k / STACK.length) * Math.PI * 2; return [cx + rx * Math.cos(a), cy + ry * Math.sin(a)]; });
+  return `<div class="orbit">
+    <svg class="orbit-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Agent Arena connects to ${esc(STACK.map((s) => s[0]).join(", "))}">
+      <ellipse class="o-ring" cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}"/>
+      ${pos.map(([x, y], k) => `<path class="o-link" data-o="${k}" d="M${cx} ${cy} L${x.toFixed(1)} ${y.toFixed(1)}"/>`).join("")}
+      <g class="o-core"><circle cx="${cx}" cy="${cy}" r="56"/><text x="${cx}" y="${cy - 4}" text-anchor="middle">Agent</text><text x="${cx}" y="${cy + 16}" text-anchor="middle">Arena</text></g>
+      ${pos.map(([x, y], k) => `<g class="o-node" data-o="${k}" tabindex="0" role="button" aria-label="${esc(STACK[k][0])}: ${esc(STACK[k][1])}"><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="40"/><text x="${x.toFixed(1)}" y="${(y - 2).toFixed(1)}" text-anchor="middle">${esc(STACK[k][0].split(" ")[0])}</text><text class="o-role" x="${x.toFixed(1)}" y="${(y + 15).toFixed(1)}" text-anchor="middle">${esc(STACK[k][1])}</text></g>`).join("")}
+    </svg>
+    <div class="orbit-card" data-orbit-card aria-live="polite"></div>
+    <div class="orbit-rail" role="list">${STACK.map(([name, role, line]) => `<div class="orbit-chip" role="listitem"><span class="stack-role">${esc(role)}</span><b>${esc(name)}</b><p>${esc(line)}</p></div>`).join("")}</div>
+  </div>`;
+}
+function wireOrbit(scope) {
+  const card = $("[data-orbit-card]", scope);
+  if (!card) return;
+  const nodes = $$(".o-node", scope), links = $$(".o-link", scope);
+  const pick = (k) => {
+    nodes.forEach((n) => n.classList.toggle("is-on", +n.dataset.o === k));
+    links.forEach((l) => l.classList.toggle("is-on", +l.dataset.o === k));
+    const [name, role, line] = STACK[k];
+    card.innerHTML = `<span class="stack-role">${esc(role)}</span><b>${esc(name)}</b><p>${esc(line)}</p>`;
+  };
+  nodes.forEach((n) => {
+    n.addEventListener("click", () => pick(+n.dataset.o));
+    n.addEventListener("mouseenter", () => pick(+n.dataset.o));
+    n.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(+n.dataset.o); } });
+  });
+  pick(0);
+}
+
 async function pageHome(page) {
   page.innerHTML = `
   <section class="hero hero-ios">
@@ -720,14 +843,14 @@ async function pageHome(page) {
 
   <section class="section market" data-market></section>
 
-  <section class="section">
-    <div class="section-head"><div><p class="eyebrow">Under the hood</p><h2>How a trade runs</h2></div></div>
-    <ol class="flow" data-stagger>${FLOW.map(([ico, title, line]) => `<li><span class="flow-ico" aria-hidden="true">${ICON[ico]}</span><h3>${esc(title)}</h3><p>${esc(line)}</p></li>`).join("")}</ol>
+  <section class="section how" data-how>
+    <div class="section-head"><div><p class="eyebrow">Under the hood</p><h2>How a trade runs</h2></div><span class="muted small how-hint">Tap a step · swipe on phones</span></div>
+    ${howHTML()}
   </section>
 
-  <section class="section">
+  <section class="section orbit-sec" data-orbit>
     <div class="section-head"><div><p class="eyebrow">Built on real DeFi</p><h2>Every piece is onchain or verifiable</h2></div></div>
-    <div class="stack" data-stagger>${STACK.map(([name, role, line]) => `<div class="stack-item"><b>${esc(name)}</b><span class="stack-role">${esc(role)}</span><p>${esc(line)}</p></div>`).join("")}</div>
+    ${orbitHTML()}
   </section>
 
   <section class="section share-band" data-share-band>
@@ -768,6 +891,8 @@ async function pageHome(page) {
     }));
   };
   shareBand();
+  const howStop = wireHow(page);
+  wireOrbit(page);
 
   const fill = () => {
     const s = state.stats;
@@ -899,7 +1024,7 @@ async function pageHome(page) {
     try { state.flash = await api("/v1/flash/status"); updateChrome(); } catch { /* keep last */ }
     renderQuote();
   }, 10000);
-  return { onPost: renderTicker, onStats: fill, cleanup: () => { clearInterval(t); clearInterval(qt); } };
+  return { onPost: renderTicker, onStats: fill, cleanup: () => { clearInterval(t); clearInterval(qt); howStop?.(); } };
 }
 
 async function pageLeaderboard(page) {

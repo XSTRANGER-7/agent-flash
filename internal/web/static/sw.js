@@ -1,5 +1,5 @@
 // Agent Arena service worker: app shell offline, API network-first.
-const VERSION = "arena-v20";
+const VERSION = "arena-v21";
 const SHELL = [
   "/", "/index.html", "/styles.css", "/app.js", "/manifest.webmanifest", "/fonts/outfit-latin.woff2",
   "/icons/icon-192.png", "/icons/icon-512.png", "/icons/maskable-512.png",

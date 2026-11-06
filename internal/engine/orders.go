@@ -312,12 +312,22 @@ func (e *Engine) closeFromExit(ctx context.Context, w *wallet.Wallet, tr store.T
 	if !operator && tr.ProtectMode == "trailing" {
 		reason = "trailing stop hit"
 	} else if !operator {
+		// Flash's fill price is all-in (after its sell cost), so a take
+		// profit can fill below the trigger. Judge by the market price now.
+		addr := tr.TokenAddr
+		if addr == "" {
+			addr = e.Cfg.WETH
+		}
+		ref := e.tokenPrice(addr)
+		if ref <= 0 {
+			ref = exitPx
+		}
 		switch {
-		case tr.StopMoved && exitPx > 0 && exitPx <= tr.StopLoss*1.005:
-			reason = "stop hit at break-even"
-		case exitPx > 0 && exitPx >= tr.TakeProfit*0.995:
+		case ref > 0 && tr.TakeProfit > 0 && ref >= tr.TakeProfit*0.997:
 			reason = "take profit hit"
-		case exitPx > 0 && exitPx <= tr.StopLoss*1.005:
+		case tr.StopMoved && ref > 0 && ref <= tr.StopLoss*1.003:
+			reason = "stop hit after it was moved"
+		case ref > 0 && ref <= tr.StopLoss*1.003:
 			reason = "stop loss hit"
 		case pnl != nil && *pnl > 0:
 			reason = "take profit hit"
