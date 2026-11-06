@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"regexp"
 	"strings"
@@ -379,7 +380,8 @@ func (s *Server) testTrade(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, code, res)
 }
 
-func round2(x float64) float64 { return float64(int64(x*100+0.5)) / 100 }
+// round2 rounds half away from zero, for losses too (-0.046 -> -0.05).
+func round2(x float64) float64 { return math.Round(x*100) / 100 }
 
 func (s *Server) emergencyStop(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)

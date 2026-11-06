@@ -16,3 +16,13 @@ func TestPublicBaseHonoursTheProxy(t *testing.T) {
 		t.Fatalf("money %s %s", money(-1.5), money(75616))
 	}
 }
+
+// Losses must round like gains: a first real trade lost $0.046 and the proof
+// page showed -$0.04 because the old round2 truncated toward zero.
+func TestRound2IsSymmetric(t *testing.T) {
+	for in, want := range map[float64]float64{-0.046057: -0.05, -0.05: -0.05, 0.046057: 0.05, 5.95: 5.95, -1.004: -1, 0: 0} {
+		if got := round2(in); got != want {
+			t.Fatalf("round2(%v) = %v, want %v", in, got, want)
+		}
+	}
+}
