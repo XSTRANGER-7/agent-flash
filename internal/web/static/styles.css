@@ -1273,6 +1273,23 @@ a.trade-item:active { background: var(--fill); }
 .sheet-btn span { font-size: 11px; font-weight: 500; color: var(--sage); }
 .sheet-btn:hover { background: var(--moss); }
 .sheet-btn:active { transform: scale(.96); }
+/* share targets: a round mark on the platform's colour above the name */
+.share-grid .sheet-btn { min-height: 96px; gap: 7px; padding: 12px 6px; }
+.share-grid .sheet-btn b { font-weight: 600; }
+.sheet-btn .sh-ico { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; background: var(--moss); color: var(--signal); font-size: inherit; transition: transform .18s var(--spring); }
+.sh-ico svg { width: 21px; height: 21px; }
+.sheet-btn:hover .sh-ico { transform: scale(1.07); }
+.sheet-btn.sh-x .sh-ico { background: #000; color: #fff; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .22); }
+.sh-x .sh-ico svg { width: 18px; height: 18px; }
+.sheet-btn.sh-telegram .sh-ico { background: #229ed9; color: #fff; }
+.sh-telegram .sh-ico svg { width: 23px; height: 23px; margin-left: -2px; }
+.sheet-btn.sh-whatsapp .sh-ico { background: #25d366; color: #fff; }
+.sh-whatsapp .sh-ico svg { width: 22px; height: 22px; }
+.sheet-btn .sh-sub { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 2px 4px; font-size: 11px; font-weight: 500; color: var(--sage); }
+.sh-sub i { font-style: normal; white-space: nowrap; }
+.sh-sub svg { width: 12px; height: 12px; flex: none; }
+.sh-sub svg + svg { margin-right: 2px; }
+@media (max-width: 380px) { .share-grid .sheet-btn { min-height: 88px; font-size: 13px; } .sheet-btn .sh-ico { width: 38px; height: 38px; } .sheet-btn .sh-sub { font-size: 10px; } }
 .sheet-url { margin-top: var(--s4); font-size: 12px; color: var(--sage-2); overflow-wrap: anywhere; }
 .sheet-cta { position: sticky; bottom: 0; z-index: 1; margin-top: var(--s5); padding: var(--s3) 0 0; background: linear-gradient(transparent, var(--pine) 30%); }
 .sheet-cta .btn-block { flex: 1; }
