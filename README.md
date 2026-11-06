@@ -40,6 +40,8 @@ Every row is a real Definitive Flash order that filled on Base. The app's `#/pro
 | What | Flash order | Base transaction |
 | --- | --- | --- |
 | **Limit + attached bracket** buy, $3 USDC → 0.001344 WETH (community agent's account) | `5b8e1c64-4479-4d1c-8553-f7341640adbb`, bracket `26722622-…` active | [0x5d1df04d…](https://basescan.org/tx/0x5d1df04dd87b7768ef51ee36b53bf8307f5969e737c95aa1563e5da6f898c92c) |
+| **Bracket exit leg** of that trade: target moved with a signed `PATCH` to just above the price, then Flash sold 0.001344 WETH for 2.972506 USDC | bracket `26722622-846f-4441-8a2a-4f936349e56a` | [0x4e32ce4a…](https://basescan.org/tx/0x4e32ce4a16187e413ea8caff464d7e57dc8bf61c785dc0841ebe74aa9c6cc9f7) |
+| Gasless USDC deposit: the user signed once (EIP-3009), the arena's gas tank sent it | n/a | [0x3d974456…](https://basescan.org/tx/0x3d9744562871bbc3444b000eea3a41ad726126fc816dbee4873f4d16285fd39f) |
 | Community agent "Kaku agent" market + bracket buy, $2.50 | `ae9334fc-1ded-4774-9753-04df8310fc3c` | [0x392d6f14…](https://basescan.org/tx/0x392d6f14ca0fb0dc1127ff97206a918da139f7ca21f57efbb4360456151dbd4c) |
 | Exit: signed cancel of the bracket, then market sell | `b0391807-ae02-4d29-8e42-81038b5c3fd8` | [0xd65d69d0…](https://basescan.org/tx/0xd65d69d0deabd9ff5f38c23312522a0a162de287c807afbb79798e6887a7d37a) |
 | **Copy trade**: a follower's sub-wallet copied the agent, $1.50, same stop loss | `4b54fa34-54c4-4212-ae1f-03dbf7acffb8` | [0x06af2085…](https://basescan.org/tx/0x06af208537556257d5f2fa2a75acc610bfccf52d15f2b3e0e635e7867aadebf2) |
