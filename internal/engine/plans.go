@@ -75,6 +75,9 @@ func (e *Engine) PlanStats(id string) (PlanStats, []store.Trade) {
 func (e *Engine) bestStrategy() (string, string) {
 	best, bestScore, bestClosed := "trend", math.Inf(-1), -1
 	for id, p := range e.AgentMap() {
+		if p.Community {
+			continue // people's agents have their own settings; the auto-pilot runs the built-in strategies
+		}
 		_, ret, mdd := leaderboard.Stats(e.Store.PerfEquity(id))
 		score := leaderboard.Score(ret, mdd)
 		closed := 0

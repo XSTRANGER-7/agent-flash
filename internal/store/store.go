@@ -185,6 +185,13 @@ type AgentLimits struct {
 	MaxHoldMin   int     `json:"maxHoldMin,omitempty"`   // close at market after this long (0 = arena setting)
 }
 
+// DeleteUserAgent removes a person's agent (its trades stay in the record).
+func (st *Store) DeleteUserAgent(id string) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	delete(st.s.UserAgents, id)
+}
+
 func (st *Store) PutUserAgent(a UserAgent) {
 	st.mu.Lock()
 	defer st.mu.Unlock()

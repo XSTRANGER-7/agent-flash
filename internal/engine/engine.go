@@ -76,6 +76,7 @@ type Engine struct {
 	// Agents added at runtime. The map is copy-on-write: a published map is
 	// never changed, so readers never race a writer.
 	agentsMu  sync.Mutex
+	agentGen  map[string]int // bumped when an agent is (re)added: an older loop for the same id stops
 	agentsCOW atomic.Pointer[map[string]arena.Profile]
 	agentsCtx context.Context // set once RunAgents runs; new agents start under it
 }
@@ -90,6 +91,22 @@ func (e *Engine) AgentMap() map[string]arena.Profile {
 }
 
 // AddAgent registers an agent and, once agents run, starts its loop.
+// bumpGen starts a new generation for an agent id; call with agentsMu held.
+func (e *Engine) bumpGen(id string) int {
+	if e.agentGen == nil {
+		e.agentGen = map[string]int{}
+	}
+	e.agentGen[id]++
+	return e.agentGen[id]
+}
+
+// current reports whether gen is still the live loop of agent id.
+func (e *Engine) current(id string, gen int) bool {
+	e.agentsMu.Lock()
+	defer e.agentsMu.Unlock()
+	return e.agentGen[id] == gen
+}
+
 func (e *Engine) AddAgent(p arena.Profile) {
 	e.agentsMu.Lock()
 	defer e.agentsMu.Unlock()
@@ -102,8 +119,34 @@ func (e *Engine) AddAgent(p arena.Profile) {
 	next[p.ID] = p
 	e.agentsCOW.Store(&next)
 	if e.agentsCtx != nil && !existed {
-		go e.runAgent(e.agentsCtx, p.ID)
+		go e.runAgent(e.agentsCtx, p.ID, e.bumpGen(p.ID))
 	}
+}
+
+// RetireAgent removes a person's agent: it stops trading, leaves the
+// leaderboard and everyone following it stops. Its account becomes a plain
+// account again; open trades keep their take profit and stop loss. Returns
+// how many followers were unlinked.
+func (e *Engine) RetireAgent(id string) int {
+	e.agentsMu.Lock()
+	cur := e.AgentMap()
+	next := make(map[string]arena.Profile, len(cur))
+	for k, v := range cur {
+		if k != id {
+			next[k] = v
+		}
+	}
+	e.agentsCOW.Store(&next)
+	e.bumpGen(id) // its loop stops at its next tick
+	e.agentsMu.Unlock()
+	n := 0
+	for _, f := range e.Store.Followers(id) {
+		e.Store.Unfollow(f.FollowerID, id)
+		n++
+	}
+	e.Store.DeleteUserAgent(id)
+	_ = e.Store.Save()
+	return n
 }
 
 // LoadUserAgents registers the agents people made (from the store).
@@ -502,8 +545,10 @@ func (e *Engine) copyOne(ctx context.Context, in referee.Intent, src *store.Trad
 	}
 	// Copy at today's price with the agent's levels; the referee refuses the
 	// copy if the price has already moved past them.
-	if _, fresh := e.Prices.Snapshot(3 * e.Cfg.PriceEvery); fresh {
-		ci.Price = e.Prices.Last()
+	if tok, ok := e.tokenBySymbol(ci.Token); ok {
+		if _, fresh := e.tokenHistory(tok.Address, 3*e.Cfg.PriceEvery); fresh {
+			ci.Price = e.tokenPrice(tok.Address) // the coin it trades, not always WETH
+		}
 	}
 	res := e.Propose(ctx, ci)
 	if res.Trade == nil {
@@ -537,13 +582,13 @@ func boolInt(b bool) int {
 func (e *Engine) RunAgents(ctx context.Context) {
 	e.agentsMu.Lock()
 	e.agentsCtx = ctx
-	ids := make([]string, 0, len(e.AgentMap()))
+	gens := map[string]int{}
 	for id := range e.AgentMap() {
-		ids = append(ids, id)
+		gens[id] = e.bumpGen(id)
 	}
 	e.agentsMu.Unlock()
-	for _, id := range ids {
-		go e.runAgent(ctx, id)
+	for id, g := range gens {
+		go e.runAgent(ctx, id, g)
 	}
 	<-ctx.Done()
 }
@@ -571,10 +616,16 @@ func (e *Engine) coolingDown(id string, minutes int) bool {
 	if minutes <= 0 {
 		return false
 	}
-	for _, t := range e.Store.Trades(id, 20) {
-		if t.WalletID == id && t.Kind == "agent" && t.Status == "closed" && t.PnLUSD != nil && *t.PnLUSD < 0 &&
-			time.Since(t.UpdatedAt) < time.Duration(minutes)*time.Minute {
+	seen := 0
+	for _, t := range e.Store.Trades(id, 0) { // newest first; copies share the agent id, so filter by wallet
+		if t.WalletID != id || t.Kind != "agent" || t.Status != "closed" || t.PnLUSD == nil {
+			continue
+		}
+		if *t.PnLUSD < 0 && time.Since(t.UpdatedAt) < time.Duration(minutes)*time.Minute {
 			return true
+		}
+		if seen++; seen >= 5 {
+			break
 		}
 	}
 	return false
@@ -600,7 +651,7 @@ func (e *Engine) agentPrices(prof arena.Profile) (string, []float64, bool) {
 	return tok.Symbol, p, fresh
 }
 
-func (e *Engine) runAgent(ctx context.Context, id string) {
+func (e *Engine) runAgent(ctx context.Context, id string, gen int) {
 	if _, ok := e.Wallets.Get(id); !ok {
 		e.Log.Warn("agent has no wallet; skipping", "agent", id)
 		return
@@ -614,8 +665,8 @@ func (e *Engine) runAgent(ctx context.Context, id string) {
 		case <-t.C:
 		}
 		prof, ok := e.AgentMap()[id]
-		if !ok {
-			return
+		if !ok || !e.current(id, gen) {
+			return // retired, or replaced by a newer loop
 		}
 		ua, isUser := e.Store.UserAgent(id)
 		if isUser && (ua.Paused || e.coolingDown(id, ua.Limits.CooldownMin)) {
@@ -637,6 +688,9 @@ func (e *Engine) runAgent(ctx context.Context, id string) {
 		}
 		if isUser {
 			applyLimits(&in, ua.Limits)
+		}
+		if p := e.Cfg.MaxPositionPct; p > 0 && in.SizePct > p {
+			in.SizePct = p // the arena's largest share of a wallet per trade
 		}
 		if e.Cfg.Live() && !e.Cfg.LiveAgents {
 			// Real money only moves when a person asks (test trade) until

@@ -732,10 +732,14 @@ function wireHow(scope) {
     stage.classList.remove("is-in"); void stage.offsetWidth; stage.classList.add("is-in");
     $("[data-how-prev]", stage).addEventListener("click", () => show(i - 1, true));
     $("[data-how-next]", stage).addEventListener("click", () => show(i + 1, true));
-    steps[i].scrollIntoView({ block: "nearest", inline: "center", behavior: still ? "auto" : "smooth" });
+    const strip = steps[i].parentElement; // scroll the strip sideways only, never the page
+    if (strip.scrollWidth > strip.clientWidth) strip.scrollTo({ left: steps[i].offsetLeft - (strip.clientWidth - steps[i].offsetWidth) / 2, behavior: still ? "auto" : "smooth" });
     if (user) restart();
   };
-  const tick = () => { if (!paused && document.visibilityState === "visible") show(i + 1); };
+  let onScreen = false;
+  if ("IntersectionObserver" in window) new IntersectionObserver((es) => { onScreen = es.some((x) => x.isIntersecting); }, { threshold: 0.3 }).observe(wrap);
+  else onScreen = true;
+  const tick = () => { if (!paused && onScreen && document.visibilityState === "visible") show(i + 1); };
   const restart = () => {
     clearInterval(timer);
     wrap.classList.remove("is-playing"); void wrap.offsetWidth;
@@ -3249,7 +3253,7 @@ function accountHTML(d) {
     </dl>
     <p class="acct-link">${link}</p>
     <div class="btn-row"><button type="button" class="btn btn-primary" data-acct-add>Add funds</button>
-      ${ag ? `<a class="btn btn-ghost" href="#/agent/${enc(ag.id)}">View my agent</a><button type="button" class="btn btn-ghost" data-acct-agent-edit>Edit rules</button><button type="button" class="btn btn-ghost" data-acct-agent-pause>${ag.paused ? "Resume agent" : "Pause agent"}</button>`
+      ${ag ? `<a class="btn btn-ghost" href="#/agent/${enc(ag.id)}">View my agent</a><button type="button" class="btn btn-ghost" data-acct-agent-edit>Edit rules</button><button type="button" class="btn btn-ghost" data-acct-agent-retire>Retire agent</button><button type="button" class="btn btn-ghost" data-acct-agent-pause>${ag.paused ? "Resume agent" : "Pause agent"}</button>`
         : plan ? `<a class="btn btn-ghost" href="#/plan/${enc(plan.id)}">View my plan</a>`
         : `<button type="button" class="btn btn-ghost" data-acct-invest>${f ? "Change agent" : "Pick an agent"}</button>${f ? "" : '<button type="button" class="btn btn-ghost" data-acct-make-agent>Make my own agent</button>'}`}
       <button type="button" class="btn btn-ghost" data-acct-withdraw ${a.usdc > 0 ? "" : "disabled"}>Withdraw</button>
@@ -3299,6 +3303,15 @@ async function renderAccount(box, onChange) {
   }));
   $("[data-acct-make-agent]", box)?.addEventListener("click", () => agentSheet(() => renderAccount(box, onChange), null, d.account?.usdc));
   $("[data-acct-agent-edit]", box)?.addEventListener("click", () => agentSheet(() => renderAccount(box, onChange), d.agent, d.account?.usdc));
+  $("[data-acct-agent-retire]", box)?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    if (!(await confirmDialog("Retire your agent?", "It stops trading and leaves the leaderboard, and everyone following it stops. Open trades keep their take profit and stop loss. Your account becomes a plain account again.", "Retire"))) return;
+    await act(btn, "Retiring…", async () => {
+      await api("/v1/me/agent/retire", { method: "POST", me: true, body: {} });
+      state.board = null;
+      toast("Agent retired. Your account can invest, copy or run a plan again.", "ok");
+    });
+  });
   $("[data-acct-agent-pause]", box)?.addEventListener("click", (e) => act(e.currentTarget, "Saving…", async () => {
     await api(d.agent?.paused ? "/v1/me/agent/resume" : "/v1/me/agent/pause", { method: "POST", me: true, body: {} });
     toast(d.agent?.paused ? "Your agent is trading again" : "Your agent is paused. Open trades keep their stop loss.", "ok");
@@ -3355,7 +3368,8 @@ async function agentSheet(after, old = null, usdc = 0) {
   const sb = openSheet(old ? "Edit your agent" : "Make your agent", { wide: true });
   sb.innerHTML = `<div class="sheet-body"><div class="skel skel-row"></div></div>`;
   const toks = await api("/v1/tokens").then((d) => d.tokens || []).catch(() => [{ symbol: "WETH" }]);
-  const v0 = old || { kind: "pullback", token: toks[0]?.symbol || "WETH", window: 40, dipPct: 0.5, trend: 120, fast: 5, slow: 20, streak: 4, takeProfitPct: 2, stopLossPct: 1.2, sizePct: 50 };
+  const maxPos = +(state.stats?.limits?.maxPositionPct) || 25;
+  const v0 = old || { kind: "pullback", token: toks[0]?.symbol || "WETH", window: 40, dipPct: 0.5, trend: 120, fast: 5, slow: 20, streak: 4, takeProfitPct: 2, stopLossPct: 1.2, sizePct: Math.min(50, maxPos) };
   const val = (k, d) => esc(v0[k] ?? d);
   const L = state.stats?.limits || {};
   const lim = (k) => esc(old?.limits?.[k] || "");
@@ -3366,7 +3380,7 @@ async function agentSheet(after, old = null, usdc = 0) {
         <div class="field"><label for="ag-tag">One line about it</label><input id="ag-tag" name="tagline" maxlength="80" autocomplete="off" placeholder="Buys pullbacks in an uptrend" value="${val("tagline", "")}"></div>
       </div>
       <div class="field field-gap"><span class="label">Coin it trades</span>
-        <div class="seg seg-full" role="radiogroup" aria-label="Coin">${toks.map((t) => `<label><input type="radio" name="token" value="${esc(t.symbol)}" ${(v0.token || "WETH") === t.symbol ? "checked" : ""}><span>${esc(t.symbol)}</span></label>`).join("")}</div>
+        <div class="seg seg-full" role="radiogroup" aria-label="Coin">${toks.map((t) => `<label><input type="radio" name="token" value="${esc(t.symbol)}" ${(v0.token || "WETH").toUpperCase() === String(t.symbol).toUpperCase() ? "checked" : ""}><span>${esc(t.symbol)}</span></label>`).join("")}</div>
         <span class="hint">Bought with USDC on Base through Flash</span></div>
       <div class="field field-gap"><span class="label">Brain (strategy)</span>
         <div class="choice-grid choice-wide">${Object.entries(AGENT_KIND).map(([k, s]) => `<label class="choice"><input type="radio" name="strategy" value="${k}" ${(v0.kind || "pullback") === k ? "checked" : ""}><span class="choice-body"><b>${esc(s.label)}</b><span class="muted small">${esc(s.line)}</span></span></label>`).join("")}</div></div>
@@ -3381,13 +3395,13 @@ async function agentSheet(after, old = null, usdc = 0) {
       <div class="form-grid form-3 field-gap">
         <div class="field"><label for="ag-tp">Take profit (%)</label><input id="ag-tp" name="takeProfitPct" type="number" min="0.6" max="20" step="0.1" value="${val("takeProfitPct", 2)}" inputmode="decimal"></div>
         <div class="field"><label for="ag-sl">Stop loss (%)</label><input id="ag-sl" name="stopLossPct" type="number" min="0.3" max="5" step="0.1" value="${val("stopLossPct", 1.2)}" inputmode="decimal"><span class="hint">Every trade has one, up to 5%</span></div>
-        <div class="field"><label for="ag-size">Per trade (% of your USDC)</label><input id="ag-size" name="sizePct" type="number" min="5" max="100" step="1" value="${val("sizePct", 50)}" inputmode="numeric"><span class="hint" data-ag-usd></span></div>
+        <div class="field"><label for="ag-size">Per trade (% of your USDC)</label><input id="ag-size" name="sizePct" type="number" min="5" max="${esc(maxPos)}" step="1" value="${val("sizePct", 50)}" inputmode="numeric"><span class="hint" data-ag-usd></span><span class="hint">Up to ${esc(maxPos)}% (the arena's limit)</span></div>
       </div>
-      <details class="adv" ${old?.limits && Object.keys(old.limits).length ? "open" : ""}><summary>Advanced settings <span class="muted small">optional · blank = the arena's setting</span></summary>
+      <details class="adv" ${old?.limits && Object.keys(old.limits).length ? "open" : ""}><summary>Advanced settings <span class="muted small">optional · blank = the arena's setting · can only be stricter</span></summary>
         <div class="form-grid form-3 field-gap">
-          <div class="field"><label for="ag-cost">Cost limit (%)</label><input id="ag-cost" name="maxCostPct" type="number" min="0.2" max="3" step="0.1" placeholder="${esc(L.maxEntryCostPct ?? "")}" value="${lim("maxCostPct")}" inputmode="decimal"><span class="hint">Skip a trade when Flash's entry cost is above this</span></div>
-          <div class="field"><label for="ag-slip">Max slippage (%)</label><input id="ag-slip" name="slippagePct" type="number" min="0.1" max="3" step="0.1" placeholder="${esc(L.maxSlippage ? fixed(+L.maxSlippage * 100, 1) : "")}" value="${lim("slippagePct")}" inputmode="decimal"></div>
-          <div class="field"><label for="ag-tpd">Trades a day</label><input id="ag-tpd" name="tradesPerDay" type="number" min="1" max="100" step="1" placeholder="${esc(L.maxTradesPerDay ?? "")}" value="${lim("tradesPerDay")}" inputmode="numeric"></div>
+          <div class="field"><label for="ag-cost">Cost limit (%)</label><input id="ag-cost" name="maxCostPct" type="number" min="0.2" max="${esc(L.maxEntryCostPct || 3)}" step="0.1" placeholder="${esc(L.maxEntryCostPct ?? "")}" value="${lim("maxCostPct")}" inputmode="decimal"><span class="hint">Skip a trade when Flash's entry cost is above this</span></div>
+          <div class="field"><label for="ag-slip">Max slippage (%)</label><input id="ag-slip" name="slippagePct" type="number" min="0.1" max="${esc(L.maxSlippage ? +L.maxSlippage * 100 : 3)}" step="0.1" placeholder="${esc(L.maxSlippage ? fixed(+L.maxSlippage * 100, 1) : "")}" value="${lim("slippagePct")}" inputmode="decimal"></div>
+          <div class="field"><label for="ag-tpd">Trades a day</label><input id="ag-tpd" name="tradesPerDay" type="number" min="1" max="${esc(L.maxTradesPerDay || 100)}" step="1" placeholder="${esc(L.maxTradesPerDay ?? "")}" value="${lim("tradesPerDay")}" inputmode="numeric"></div>
           <div class="field"><label for="ag-min">Smallest trade ($)</label><input id="ag-min" name="minTradeUsd" type="number" min="1" max="${esc(L.maxTradeUsd ?? 100)}" step="0.5" placeholder="${esc(L.minTradeUsd || "")}" value="${lim("minTradeUsd")}" inputmode="decimal"><span class="hint">Small slices are lifted to this</span></div>
           <div class="field"><label for="ag-max">Largest trade ($)</label><input id="ag-max" name="maxTradeUsd" type="number" min="1" max="${esc(L.maxTradeUsd ?? 100)}" step="0.5" placeholder="${esc(L.maxTradeUsd ?? "")}" value="${lim("maxTradeUsd")}" inputmode="decimal"><span class="hint">Up to the arena's ${esc(usd(L.maxTradeUsd, 0))}</span></div>
           <div class="field"><label for="ag-cool">Wait after a loss (min)</label><input id="ag-cool" name="cooldownMin" type="number" min="0" max="1440" step="5" placeholder="0" value="${lim("cooldownMin")}" inputmode="numeric"><span class="hint">No new trade for this long</span></div>

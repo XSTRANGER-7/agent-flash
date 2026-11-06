@@ -93,6 +93,13 @@ func (e *Engine) history(ctx context.Context, sym string) ([]float64, string, er
 // orderCost is Flash's cost of one order of usd on sym: the average of a real
 // buy quote and the matching sell quote. Cached for two minutes per size.
 func (e *Engine) orderCost(ctx context.Context, tokAddr string, usd float64) (float64, string) {
+	// Group sizes into buckets ($1 steps to $20, then $5) so a public caller
+	// cannot turn every cent into two new Flash quotes; the cache stays small.
+	if usd <= 20 {
+		usd = math.Max(1, math.Round(usd))
+	} else {
+		usd = math.Round(usd/5) * 5
+	}
 	key := strings.ToLower(tokAddr) + "|" + strconv.FormatFloat(usd, 'f', 2, 64)
 	bt.mu.Lock()
 	if c, ok := bt.cost[key]; ok && time.Since(bt.costAt[key]) < 2*time.Minute {
@@ -124,6 +131,9 @@ func (e *Engine) orderCost(ctx context.Context, tokAddr string, usd float64) (fl
 		c = 0
 	}
 	bt.mu.Lock()
+	if len(bt.cost) > 200 {
+		bt.cost, bt.costAt = map[string]float64{}, map[string]time.Time{}
+	}
 	bt.cost[key], bt.costAt[key] = c, time.Now()
 	bt.mu.Unlock()
 	return c, "Flash quotes at this size"

@@ -125,12 +125,16 @@ func randHex(n int) string {
 }
 
 func clientIP(r *http.Request) string {
-	if f := r.Header.Get("Cf-Connecting-Ip"); f != "" {
-		return f
-	}
 	ip, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		ip = r.RemoteAddr
+	}
+	// Trust Cloudflare's header only from a local proxy (cloudflared runs on
+	// this machine); anyone talking to the server directly could fake it.
+	if f := strings.TrimSpace(r.Header.Get("Cf-Connecting-Ip")); f != "" {
+		if a := net.ParseIP(ip); a != nil && a.IsLoopback() {
+			return f
+		}
 	}
 	return ip
 }
@@ -388,8 +392,13 @@ func (s *Server) agentRules(r *http.Request, id, owner string, old *store.UserAg
 	if token == "" {
 		token = s.E.Cfg.TradeAsset
 	}
-	if _, ok := s.E.Cfg.TokenBySymbol(token); !ok {
+	tk, ok := s.E.Cfg.TokenBySymbol(token)
+	if !ok {
 		return store.UserAgent{}, 400, fmt.Errorf("token: one of %s", strings.Join(s.E.Cfg.TokenSymbols(), ", "))
+	}
+	token = tk.Symbol // canonical spelling (cbBTC, not CBBTC)
+	if mp := s.E.Cfg.MaxPositionPct; mp > 0 && in.SizePct > mp {
+		return store.UserAgent{}, 400, fmt.Errorf("size: at most %.0f%% of the account per trade (the arena's limit)", mp)
 	}
 	_, p, err := arena.BuildStrategy(arena.StrategyParams{Kind: in.Strategy, Fast: in.Fast, Slow: in.Slow, Window: in.Window,
 		DipPct: in.DipPct, Streak: in.Streak, Trend: in.Trend, TPPct: in.TakeProfitPct, SLPct: in.StopLossPct, SizePct: in.SizePct})
@@ -442,6 +451,17 @@ func (s *Server) meAgentAction(w http.ResponseWriter, r *http.Request, addr stri
 	}
 	if r.PathValue("action") == "edit" {
 		s.meAgentEdit(w, r, addr, wl)
+		return
+	}
+	if r.PathValue("action") == "retire" {
+		ua, ok := s.E.Store.UserAgent(wl.ID)
+		if !ok {
+			writeErr(w, 404, "your account is not an agent")
+			return
+		}
+		n := s.E.RetireAgent(wl.ID)
+		s.E.Feed.Publish(feed.Post{Kind: "follow", AgentID: wl.ID, Text: fmt.Sprintf("Agent \"%s\" was retired by its maker; %d follower(s) stopped following it. Open trades keep their take profit and stop loss.", ua.Name, n)})
+		writeJSON(w, 200, s.meView(r.Context(), addr))
 		return
 	}
 	pause := r.PathValue("action") == "pause"
@@ -790,7 +810,13 @@ func (s *Server) meSubWallet(w http.ResponseWriter, r *http.Request, addr string
 		return
 	}
 	switch act := r.PathValue("action"); act {
-	case "pause", "resume":
+	case "resume":
+		if p, ok := s.E.Store.Profile(wl.ID); ok && strings.Contains(strings.ToLower(p.PausedReason), "operator") {
+			writeErr(w, 409, "the operator paused this wallet; ask them to resume it")
+			return
+		}
+		fallthrough
+	case "pause":
 		s.E.Store.UpdateProfile(wl.ID, func(p *store.WalletProfile) {
 			p.Paused, p.PausedReason = act == "pause", ""
 			if act == "pause" {

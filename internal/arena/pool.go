@@ -7,6 +7,7 @@ import (
 	"math"
 	"math/big"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vikram/agent-arena/internal/evm"
@@ -18,11 +19,21 @@ type Pool struct {
 	Address string
 	rpc     *evm.RPC
 
+	// Set once by Verify (price-feed goroutine), read by charts and
+	// backtests from other goroutines: guarded by mu.
+	mu           sync.RWMutex
 	wethIsToken0 bool
 	weth, usdc   string
 	decWETH      int
 	decUSDC      int
 	verified     bool
+}
+
+// params is a consistent copy of what Verify found.
+func (p *Pool) params() (ok, wethIsToken0 bool, decWETH, decUSDC int) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.verified, p.wethIsToken0, p.decWETH, p.decUSDC
 }
 
 var (
@@ -71,21 +82,26 @@ func (p *Pool) Verify(ctx context.Context) error {
 		return err
 	}
 	weth, usdc := strings.ToLower(p.weth), strings.ToLower(p.usdc)
+	var w0 bool
 	switch {
 	case t0 == weth && t1 == usdc:
-		p.wethIsToken0 = true
+		w0 = true
 	case t0 == usdc && t1 == weth:
-		p.wethIsToken0 = false
+		w0 = false
 	default:
 		return fmt.Errorf("pool %s pairs %s/%s, not WETH/USDC", p.Address, t0, t1)
 	}
-	if p.decWETH, err = p.decimals(ctx, p.weth); err != nil {
+	dW, err := p.decimals(ctx, p.weth)
+	if err != nil {
 		return err
 	}
-	if p.decUSDC, err = p.decimals(ctx, p.usdc); err != nil {
+	dU, err := p.decimals(ctx, p.usdc)
+	if err != nil {
 		return err
 	}
-	p.verified = true
+	p.mu.Lock()
+	p.wethIsToken0, p.decWETH, p.decUSDC, p.verified = w0, dW, dU, true
+	p.mu.Unlock()
 	return nil
 }
 
@@ -107,7 +123,8 @@ func (p *Pool) decimals(ctx context.Context, token string) (int, error) {
 
 // Price returns the USD (USDC) price of one WETH from slot0.
 func (p *Pool) Price(ctx context.Context) (float64, error) {
-	if !p.verified {
+	ok, w0, dW, dU := p.params()
+	if !ok {
 		return 0, errors.New("pool not verified")
 	}
 	r, err := p.rpc.Call(ctx, p.Address, selSlot0)
@@ -118,7 +135,7 @@ func (p *Pool) Price(ctx context.Context) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return PriceFromSqrtX96(new(big.Int).SetBytes(w), p.wethIsToken0, p.decWETH, p.decUSDC)
+	return PriceFromSqrtX96(new(big.Int).SetBytes(w), w0, dW, dU)
 }
 
 // PriceFromSqrtX96 converts a Uniswap v3 sqrtPriceX96 into USDC per WETH.
@@ -161,7 +178,8 @@ func pad32(v int64) []byte {
 // for fewer points. Each price is the average over its step (time-weighted,
 // so one odd trade inside a block does not move it).
 func (p *Pool) History(ctx context.Context, n int, step time.Duration) ([]float64, error) {
-	if !p.verified {
+	ok, w0, dW, dU := p.params()
+	if !ok {
 		return nil, errors.New("pool not verified")
 	}
 	sec := int64(step / time.Second)
@@ -203,10 +221,10 @@ func (p *Pool) History(ctx context.Context, n int, step time.Duration) ([]float6
 			d := new(big.Int).Sub(ticks[i+1], ticks[i])
 			tick, _ := new(big.Float).Quo(new(big.Float).SetInt(d), big.NewFloat(float64(sec))).Float64()
 			px := math.Pow(1.0001, tick) // raw token1 per raw token0
-			if p.wethIsToken0 {
-				px *= math.Pow10(p.decWETH - p.decUSDC)
+			if w0 {
+				px *= math.Pow10(dW - dU)
 			} else {
-				px = 1 / (px * math.Pow10(p.decUSDC-p.decWETH))
+				px = 1 / (px * math.Pow10(dU-dW))
 			}
 			if px <= 0 || math.IsInf(px, 0) || math.IsNaN(px) {
 				return nil, errors.New("history: price out of range")
@@ -241,11 +259,12 @@ func (p *Pool) TVL(ctx context.Context, price float64) (float64, error) {
 		f, _ := new(big.Float).Quo(new(big.Float).SetInt(new(big.Int).SetBytes(w)), new(big.Float).SetFloat64(math.Pow10(dec))).Float64()
 		return f, nil
 	}
-	u, err := bal(p.usdc, p.decUSDC)
+	_, _, dW, dU := p.params()
+	u, err := bal(p.usdc, dU)
 	if err != nil {
 		return 0, err
 	}
-	w, err := bal(p.weth, p.decWETH)
+	w, err := bal(p.weth, dW)
 	if err != nil {
 		return 0, err
 	}

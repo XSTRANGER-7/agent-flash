@@ -149,3 +149,57 @@ func TestAgentLimitsApplyAndAreCapped(t *testing.T) {
 		t.Fatalf("want DAILY_LIMIT after its own 1 trade a day, got %+v", res.Decision)
 	}
 }
+
+// Advanced settings can only be stricter than the arena: followers trade
+// under the agent's cost and slippage limits.
+func TestAgentLimitsNeverLoosenTheArena(t *testing.T) {
+	e, _ := setup(t)
+	e.Cfg.MaxEntryCostPct, e.Cfg.MaxSlippage, e.Cfg.MaxTradesPerDay = 1.2, "0.01", 5
+	for _, l := range []store.AgentLimits{{MaxCostPct: 1.5}, {SlippagePct: 2}, {TradesPerDay: 6}} {
+		if _, err := CheckAgentLimits(e.Cfg, l); err == nil {
+			t.Fatalf("accepted a looser limit than the arena: %+v", l)
+		}
+	}
+	if _, err := CheckAgentLimits(e.Cfg, store.AgentLimits{MaxCostPct: 1, SlippagePct: 0.5, TradesPerDay: 3}); err != nil {
+		t.Fatalf("stricter limits refused: %v", err)
+	}
+}
+
+// Retiring an agent removes it from the arena, unlinks its followers, and
+// its loop stops; the same account can make a new agent later.
+func TestRetireAgent(t *testing.T) {
+	e, _ := setup(t)
+	e.Cfg.AgentEvery = 20 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.RunAgents(ctx)
+	time.Sleep(10 * time.Millisecond)
+	ua := store.UserAgent{ID: "follower1", Name: "Old", Owner: "0x000000000000000000000000000000000000dEaD", Kind: "contrarian",
+		Streak: 2, TPPct: 1.5, SLPct: 1, SizePct: 25, CreatedAt: time.Now().UTC()}
+	prof, _ := UserAgentProfile(ua)
+	e.Store.PutUserAgent(ua)
+	e.AddAgent(prof)
+	e.Store.PutFollow(&store.Follow{FollowerID: "trendhunter", AgentID: "follower1", Mode: "copy", Active: true})
+	e.agentsMu.Lock()
+	gen := e.agentGen["follower1"]
+	e.agentsMu.Unlock()
+	if n := e.RetireAgent("follower1"); n != 1 {
+		t.Fatalf("unlinked %d followers, want 1", n)
+	}
+	if _, ok := e.AgentMap()["follower1"]; ok {
+		t.Fatal("retired agent still listed")
+	}
+	if _, ok := e.Store.UserAgent("follower1"); ok {
+		t.Fatal("retired agent still stored")
+	}
+	if len(e.Store.Followers("follower1")) != 0 {
+		t.Fatal("followers not unlinked")
+	}
+	if e.current("follower1", gen) {
+		t.Fatal("the retired agent's loop would keep running")
+	}
+	e.AddAgent(prof) // make it again
+	if _, ok := e.AgentMap()["follower1"]; !ok {
+		t.Fatal("could not make the agent again")
+	}
+}

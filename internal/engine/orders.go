@@ -316,14 +316,22 @@ func (e *Engine) closeFromExit(ctx context.Context, w *wallet.Wallet, tr store.T
 		reason = "trailing stop hit"
 	} else if !operator {
 		// Flash's fill price is all-in (after its sell cost), so a take
-		// profit can fill below the trigger. Judge by the market price now.
+		// profit can fill below the trigger. A fresh fill is judged by the
+		// market price now; a late one (after a restart) by the fill price
+		// with the cost added back, since today's price says nothing about it.
 		addr := tr.TokenAddr
 		if addr == "" {
 			addr = e.Cfg.WETH
 		}
-		ref := e.tokenPrice(addr)
+		ref := 0.0
+		if at := lastFill(o); !at.IsZero() && time.Since(at) < 3*time.Minute {
+			ref = e.tokenPrice(addr)
+		}
 		if ref <= 0 {
 			ref = exitPx
+			if tr.EntryCostPct > 0 && tr.EntryCostPct < 10 {
+				ref = exitPx * (1 + tr.EntryCostPct/100)
+			}
 		}
 		switch {
 		case ref > 0 && tr.TakeProfit > 0 && ref >= tr.TakeProfit*0.997:
@@ -384,7 +392,11 @@ func (e *Engine) maybeMoveStop(ctx context.Context, w *wallet.Wallet, tr store.T
 	if !on || tr.StopMoved || tr.BracketOrderID == "" || tr.BreakEvenPrice <= 0 || tr.StopLoss >= tr.BreakEvenPrice || tr.TakeProfit <= tr.BreakEvenPrice {
 		return
 	}
-	px := e.Prices.Last()
+	addr := tr.TokenAddr
+	if addr == "" {
+		addr = e.Cfg.WETH
+	}
+	px := e.tokenPrice(addr) // the coin this trade holds, not always WETH
 	trigger := tr.BreakEvenPrice + (tr.TakeProfit-tr.BreakEvenPrice)/2
 	if px < trigger {
 		return
@@ -570,6 +582,22 @@ func (e *Engine) cancelQuietly(ctx context.Context, w *wallet.Wallet, orderID st
 	if err := e.Exec.Cancel(ctx, w, orderID); err != nil {
 		e.Log.Debug("sibling cancel", "order", orderID, "err", err)
 	}
+}
+
+// lastFill is when an order last filled (zero if unknown).
+func lastFill(o *flash.Order) time.Time {
+	var at time.Time
+	for _, f := range o.Fills {
+		if t, err := time.Parse(time.RFC3339, f.FilledAt); err == nil && t.After(at) {
+			at = t
+		}
+	}
+	if at.IsZero() && o.ClosedAt != "" {
+		if t, err := time.Parse(time.RFC3339, o.ClosedAt); err == nil {
+			at = t
+		}
+	}
+	return at
 }
 
 // Rebracket changes the take profit and stop loss of a live trade (Flash
