@@ -16,6 +16,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -262,10 +263,14 @@ func transparency(st M) {
 		okA = okA && strings.HasPrefix(s(a, "address"), "0x")
 	}
 	check("agent wallets public (verifiable)", okA, "every agent shows its Base address")
+	pf := get("/v1/proof")
+	nl, _ := pf["notListed"].(M)
+	check("proof page lists no paper trades", len(list(pf, "trades")) == 0 && f(nl, "paper") > 0,
+		fmt.Sprintf("%d real listed, %.0f paper only counted", len(list(pf, "trades")), f(nl, "paper")))
 	c, _, _ := do("GET", "/v1/admin/wallets", nil, false)
 	check("admin API needs the token", c == 401, fmt.Sprint("HTTP ", c))
 	leak := false
-	for _, p := range []string{"/v1/flash/status", "/v1/agents", "/v1/feed?limit=100", "/v1/trades?limit=100", "/v1/plans", "/v1/stats"} {
+	for _, p := range []string{"/v1/flash/status", "/v1/agents", "/v1/feed?limit=100", "/v1/trades?limit=100", "/v1/plans", "/v1/stats", "/v1/proof"} {
 		_, _, raw := do("GET", p, nil, false)
 		if strings.Contains(raw, "dpka_") || strings.Contains(raw, token) {
 			leak = true
@@ -362,8 +367,14 @@ func risk(w string) {
 	_, nw := post("/v1/admin/wallets", M{"owner": "E2E " + runTag + " Risk", "agentId": "trendhunter", "mode": "copy", "payout": "0x000000000000000000000000000000000000dEaD", "maxPerTradeUsd": 1, "dailyCapUsd": 1})
 	bal := f(nw, "wallet", "usdc")
 	if fresh := s(nw, "wallet", "id"); check("fresh wallet for the size rule", fresh != "" && bal > 0, fmt.Sprintf("$%.0f paper USDC %s", bal, errMsg(nw))) {
-		code, r := propose(fresh, "trendhunter", float64(int(bal*0.4)), 2, 1, nil)
-		check(fmt.Sprintf("blocks: bet 40%% of a $%.0f wallet", bal), code == 422 && s(r, "decision", "code") == "SIZE", s(r, "decision", "code")+" "+s(r, "decision", "reason"))
+		// Bet 15 points over the server's MAX_POSITION_PCT (25 by default).
+		maxPos := f(get("/v1/stats"), "limits", "maxPositionPct")
+		if maxPos <= 0 {
+			maxPos = 25
+		}
+		bet := math.Min(maxPos+15, 95)
+		code, r := propose(fresh, "trendhunter", float64(int(bal*bet/100)), 2, 1, nil)
+		check(fmt.Sprintf("blocks: bet %.0f%% of a $%.0f wallet (max %.0f%%)", bet, bal, maxPos), code == 422 && s(r, "decision", "code") == "SIZE", s(r, "decision", "code")+" "+s(r, "decision", "reason"))
 	}
 	post("/v1/admin/wallets/"+w+"/pause", nil)
 	code, r := propose(w, "trendhunter", 5, 2, 1, nil)

@@ -64,8 +64,12 @@ type Config struct {
 	ApprovalThresholdUSD float64 // copy trades above this need a human
 	ApprovalTimeout      time.Duration
 	MaxTradeUSD          float64
-	MaxPositionPct       float64
-	MaxTradesPerDay      int
+	// MinTradeUSD raises a %-sized agent / copy trade to at least this much
+	// when the wallet holds it. Flash's cost per order is mostly fixed, so on
+	// a small wallet a 20% slice is too small to pass the cost guard. 0 = off.
+	MinTradeUSD     float64
+	MaxPositionPct  float64
+	MaxTradesPerDay int
 	// Competitive-safety guards (see doc tab 7)
 	MaxPriceDeviationPct float64 // refuse quotes that drift too far from the reference price
 	MinLiquidityUSD      float64 // refuse tokens that may be hard to sell ("can't sell" problem)
@@ -140,6 +144,7 @@ func Load() (*Config, error) {
 		ApprovalThresholdUSD: num("APPROVAL_THRESHOLD_USD", 10),
 		ApprovalTimeout:      dur("APPROVAL_TIMEOUT", 2*time.Minute),
 		MaxTradeUSD:          num("MAX_TRADE_USD", 5),
+		MinTradeUSD:          num("MIN_TRADE_USD", 0),
 		MaxPositionPct:       num("MAX_POSITION_PCT", 25),
 		MaxTradesPerDay:      int(num("MAX_TRADES_PER_DAY", 5)),
 		MaxPriceDeviationPct: num("MAX_PRICE_DEVIATION_PCT", 1.5),
@@ -240,6 +245,9 @@ func Load() (*Config, error) {
 	}
 	if c.TestTradeUSD <= 0 || c.TestTradeUSD > c.MaxTradeUSD {
 		errs = append(errs, "TEST_TRADE_USD must be > 0 and <= MAX_TRADE_USD")
+	}
+	if c.MinTradeUSD < 0 || c.MinTradeUSD > c.MaxTradeUSD {
+		errs = append(errs, "MIN_TRADE_USD must be 0 (off) or up to MAX_TRADE_USD")
 	}
 	if c.StreamURL == "" {
 		c.StreamURL = streamURL(c.FlashBaseURL)

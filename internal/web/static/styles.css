@@ -448,6 +448,15 @@ a.trade-item:has(> .t-ico) { grid-template-columns: 44px minmax(0, 1fr) auto 8px
 .t-ico { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; background: var(--moss); color: var(--mist); font: 700 19px/1 var(--font); }
 .t-ico svg { width: 20px; height: 20px; fill: var(--mist); }
 .t-ico svg path + path { opacity: .65; }
+/* onchain proof: ids and Basescan links under each real trade */
+.proof-item .trade-item { padding-bottom: 6px; }
+.proof-links { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 var(--s4) 14px calc(var(--s4) + 44px + var(--s3)); }
+.txid, .txlink { display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 0 12px; border-radius: 999px; background: var(--ink-2); font-size: 12px; font-weight: 500; color: var(--sage); white-space: nowrap; }
+.txid .link { font-size: 12px; }
+.txlink { position: relative; background: var(--tint); color: var(--signal); font-weight: 600; text-decoration: none; }
+.txlink::after { content: ""; position: absolute; inset: -6px -2px; }
+.txlink:hover { background: var(--tint-2); }
+@media (max-width: 760px) { .proof-links { padding-left: var(--s4); } }
 /* profit / loss as the design's change pill */
 .t-right .pl { display: inline-flex; align-items: center; height: 28px; padding: 0 11px; border-radius: 999px; font-size: 13px; background: var(--pill); }
 .t-right .pl.up { background: var(--signal); color: var(--on-signal); }

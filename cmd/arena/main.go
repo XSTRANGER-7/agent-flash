@@ -82,6 +82,8 @@ func main() {
 		err = pruneTestWallets(os.Args[2:])
 	case "simulate":
 		err = simulate()
+	case "costs":
+		err = costs(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -93,6 +95,7 @@ func main() {
 }
 
 func usage() {
+	fmt.Fprintln(os.Stderr, "  costs [-sizes 1,2,5]              real Flash round-trip cost per trade size (quotes only)")
 	fmt.Fprintln(os.Stderr, "  simulate                          onchain checks on real Base state with test money (nothing broadcast)")
 	fmt.Fprintln(os.Stderr, "  reset-paper                       start paper money over (old paper data is kept in a backup folder)")
 	fmt.Fprintln(os.Stderr, "  prune-test-wallets [-dry]         remove EMPTY wallets left by e2e runs (keys kept in a backup file)")

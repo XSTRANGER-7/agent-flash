@@ -56,6 +56,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /v1/price", s.price)
 	m.HandleFunc("GET /v1/flash/status", s.flashStatus)
 	m.HandleFunc("GET /v1/stats", s.stats)
+	m.HandleFunc("GET /v1/proof", s.proof)
 	m.HandleFunc("GET /v1/approvals/{id}", s.approvalGet)
 	m.HandleFunc("POST /v1/predictions", s.predict)
 	// World Agent Pass callback (proof verified server-side)
@@ -574,7 +575,7 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 		"priceFresh": fresh, "symbol": s.E.Cfg.TradeAsset, "chain": s.E.Cfg.Chain,
 		"fees":   map[string]any{"bps": feeBps, "routedUsd": round2(routed), "earnedUsd": round2(routed * feeBps / 10000), "paper": s.E.Cfg.Paper},
 		"social": map[string]any{"signalBot": s.E.Cfg.DiscordWebhook != "" || s.E.Cfg.TelegramToken != "", "rss": "/signals.rss"},
-		"limits": map[string]any{"maxTradeUsd": s.E.Cfg.MaxTradeUSD, "approvalThresholdUsd": s.E.Cfg.ApprovalThresholdUSD,
+		"limits": map[string]any{"maxTradeUsd": s.E.Cfg.MaxTradeUSD, "minTradeUsd": s.E.Cfg.MinTradeUSD, "maxPositionPct": s.E.Cfg.MaxPositionPct, "approvalThresholdUsd": s.E.Cfg.ApprovalThresholdUSD,
 			"maxApprovalUsd": s.E.Cfg.MaxApprovalUSD, "maxPriceDeviationPct": s.E.Cfg.MaxPriceDeviationPct, "maxAgentDrawdownPct": s.E.Cfg.MaxAgentDrawdownPct,
 			"maxEntryCostPct": s.E.Cfg.MaxEntryCostPct, "maxSlippage": s.E.Cfg.MaxSlippage},
 	})

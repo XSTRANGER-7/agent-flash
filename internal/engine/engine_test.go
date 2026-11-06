@@ -401,6 +401,28 @@ func TestProposePlacesSignedBracketOrder(t *testing.T) {
 	}
 }
 
+// MIN_TRADE_USD lifts a small % slice to a size whose fixed Flash cost is
+// bearable, but never above what the wallet holds.
+func TestMinTradeUSDLiftsSmallSlices(t *testing.T) {
+	e, ff := setup(t)
+	e.Cfg.MinTradeUSD, e.Cfg.MaxPositionPct = 5, 50
+	res := e.Propose(context.Background(), intent()) // 20% of $20 = $4
+	if !res.Decision.OK || res.Trade == nil || res.Trade.SizeUSD != 5 {
+		t.Fatalf("want a $5 trade, got %+v / %+v", res.Decision, res.Trade)
+	}
+	// A wallet holding less than the minimum keeps its % slice.
+	w, _ := e.Wallets.Get("follower1")
+	ff.mu.Lock()
+	ff.usdc[strings.ToLower(w.Address())] = 3
+	ff.mu.Unlock()
+	in := intent()
+	in.AgentID, in.WalletID = "trendhunter", "follower1"
+	res = e.Propose(context.Background(), in)
+	if res.Trade == nil || res.Trade.SizeUSD != 0.6 {
+		t.Fatalf("want the 20%% slice ($0.60), got %+v / %+v", res.Decision, res.Trade)
+	}
+}
+
 func TestNetTargetsRaiseTakeProfitByRoundTripCost(t *testing.T) {
 	e, ff := setup(t)
 	res := e.Propose(context.Background(), intent())

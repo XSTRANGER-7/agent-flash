@@ -642,6 +642,7 @@ async function pageHome(page) {
       <div><dt>Open now</dt><dd class="num" data-tally="openTrades" data-countup data-fmt="int">—</dd></div>
       <div><dt>Fees earned</dt><dd class="num" data-fees>—</dd></div>
     </dl>
+    <p class="footnote"><a class="link" href="#/proof">Onchain proof: real Flash orders with Base transactions</a></p>
   </section>
 
   <section class="section auto-teaser" data-auto>
@@ -1625,6 +1626,7 @@ async function pageOperator(page) {
         <a class="hub-item" href="#/leaderboard"><b>Leaderboard</b><span>Ranked by Arena Score</span></a>
         <a class="hub-item" href="#/me"><b>My wallet</b><span>Trade from your own wallet</span></a>
         <a class="hub-item" href="#/signals"><b>Signals</b><span>Copy or share any trade</span></a>
+        <a class="hub-item" href="#/proof"><b>Onchain proof</b><span>Real Flash orders and Base txs</span></a>
         <a class="hub-item" href="#/docs"><b>Docs</b><span>Every feature, one page</span></a>
         <a class="hub-item" href="#/feed"><b>Live feed</b><span>Every decision, live</span></a>
       </nav>${installBlock()}`;
@@ -2746,6 +2748,59 @@ async function shareLeaderboard() {
     card: () => drawCard({ title: "Agent Arena standings", big: top[0] ? top[0].name : "Live league", line: top.map((r) => `#${r.rank} ${r.name} ${FMT.score(+r.score || 0)}`).join("   "), down: false }) });
 }
 
+/* ---------------- onchain proof ---------------- */
+// Only real-money trades are listed; each carries the Flash order id and the
+// Base transactions, so anyone can check it on Basescan.
+const txPill = (label, h) => (isHash(h) ? `<a class="txlink" href="https://basescan.org/tx/${h}" ${EXT}>${esc(label)}<span aria-hidden="true"> ↗</span></a>` : "");
+function proofItem(t) {
+  const right = t.pnlUsd != null ? `<span class="num strong">${pnlHTML(t.pnlUsd)}</span>` : "";
+  const ids = [t.orderId && `<span class="txid" title="Flash order id">Flash ${esc(short(t.orderId))}</span>`,
+    t.bracketOrderId && `<span class="txid" title="Flash exit order id">Exit order ${esc(short(t.bracketOrderId))}</span>`].filter(Boolean).join("");
+  const txs = txPill("Approve tx", t.approveTx) + txPill("Buy tx", t.entryTx) + txPill("Sell tx", t.exitTx);
+  return `<li class="proof-item">
+    <a class="trade-item" href="#/trade/${enc(t.id)}">${coinIco(t.token)}
+      <div class="t-main"><div class="t-title"><span class="t-name">Long ${esc(t.token)} <span class="num">${esc(usd(t.sizeUsd))}</span></span>${t.kind ? `<span class="mini">${esc(KIND_LABEL[t.kind] || cap(t.kind))}</span>` : ""}</div>
+        <div class="t-meta"><span>${esc(t.who)}</span><span>${esc(ago(t.at))}</span>${t.usdcSpent ? `<span class="num">paid ${esc(fixed(t.usdcSpent, 4))} USDC</span>` : ""}${t.usdcReceived ? `<span class="num">got ${esc(fixed(t.usdcReceived, 4))} USDC</span>` : ""}</div></div>
+      <div class="t-right">${statusChip(t.status)}<div>${right}</div></div></a>
+    <div class="proof-links">${t.wallet ? `<span class="txid">Wallet ${addrLink(t.wallet)}</span>` : ""}${ids}${txs || '<span class="txid">Waiting for the onchain fill</span>'}</div>
+  </li>`;
+}
+
+async function pageProof(page) {
+  page.innerHTML = `<header class="page-head page-head-row"><div><p class="eyebrow" data-reveal>Onchain proof</p><h1 data-reveal>Real trades on Flash</h1>
+      <p class="lede" data-reveal>Real money only. Every fill links to Base.</p></div>
+      <div class="btn-row" data-proof-links></div></header>
+    <div data-proof><div class="skel skel-row"></div><div class="skel skel-row"></div></div>`;
+  const box = $("[data-proof]", page);
+  const render = async () => {
+    let d;
+    try { d = await api("/v1/proof"); } catch (err) { box.innerHTML = errorState(err); return; }
+    const T = d.totals || {}, rows = d.trades || [], nl = d.notListed || {};
+    $("[data-proof-links]", page).innerHTML = isAddr(d.settlement) ? `<a class="btn btn-ghost btn-sm" href="https://basescan.org/address/${d.settlement}" ${EXT}>Flash settlement ↗</a>` : "";
+    const hidden = (+nl.paper || 0) + (+nl.dryRun || 0);
+    const budget = d.live && d.liveBudgetUsd > 0 ? `<div class="meter section-tight"><div class="meter-head"><span>Live budget used</span><span class="num">${esc(usd(d.liveSpentUsd))} of ${esc(usd(d.liveBudgetUsd))}</span></div><div class="mbar"><i data-w="${esc(Math.min(100, (d.liveSpentUsd / d.liveBudgetUsd) * 100))}"></i></div></div>` : "";
+    const html = `${d.live ? "" : `<p class="mode-note" data-reveal><span class="mini mini-paper">${esc(MODE_INFO[d.mode]?.badge || d.mode)}</span><span>Not live yet: ${esc(plural(hidden, "simulated trade"))} hidden here.</span></p>`}
+      <dl class="statline">
+        <div class="stat"><dt>Real orders</dt><dd class="num">${esc(T.orders ?? 0)}</dd></div>
+        <div class="stat"><dt>Filled onchain</dt><dd class="num">${esc(T.filled ?? 0)}</dd></div>
+        <div class="stat"><dt>Volume via Flash</dt><dd class="num">${esc(usd(T.volumeUsd ?? 0))}</dd></div>
+        <div class="stat"><dt>Base txs</dt><dd class="num">${esc(T.onchainTxs ?? 0)}</dd></div>
+        <div class="stat"><dt>Trading cost</dt><dd class="num">${esc(usd(T.entryCostUsd ?? 0))}</dd></div>
+        <div class="stat"><dt>P&amp;L</dt><dd class="num">${pnlHTML(T.pnlUsd ?? 0)}</dd></div>
+      </dl>${budget}
+      <div class="section-head section"><h2>Orders</h2><span class="muted small num">${esc(rows.length)}</span></div>
+      ${rows.length ? `<ul class="trades proof-list">${rows.map(proofItem).join("")}</ul>`
+        : emptyState("No real trades yet", d.live ? "The first live order shows here with its Base transactions." : "Switch to live mode and place a $1 test trade.", { href: "#/docs", label: "How it works" })}`;
+    if (box.dataset.html !== html) {
+      box.dataset.html = html; box.innerHTML = html;
+      $$(".mbar i[data-w]", box).forEach((el) => el.style.setProperty("width", el.dataset.w + "%"));
+    }
+  };
+  await render();
+  const t = setInterval(() => { if (document.visibilityState === "visible") render(); }, 15000);
+  return { cleanup: () => clearInterval(t), onPost: (p) => { if (/^trade_/.test(p.kind)) render(); } };
+}
+
 /* ---------------- my wallet ---------------- */
 async function pageMe(page) {
   const draw = async () => {
@@ -2801,8 +2856,9 @@ const DOCS = [
   ["safety", "Safety", `<ul><li>Referee: stop loss required, size and position caps, daily limit, one position per wallet, liquidity and risk flags.</li><li>Never blind-sign: chain, contract, vault, tokens, amount and deadline checked.</li><li>Capped approvals; Permit2 refused.</li><li>Price and cost guards; circuit breaker; emergency stop; live budget cap.</li></ul>`],
   ["social", "Social", `<ul><li>Share cards and links with previews for X, Telegram, WhatsApp, TikTok and Instagram.</li><li><a class="link" href="#/signals">Signals</a> feed plus <a class="link" href="/signals.rss">RSS</a>.</li><li>Optional Discord / Telegram bot posts every agent trade.</li><li>Win / lose predictions on every trade.</li></ul>`],
   ["fees", "Fees", `<p>An integrator fee rides on every Flash order (shown on Operator). Flash's own cost is all-in in each quote.</p>`],
+  ["proof", "Onchain proof", `<p>The <a class="link" href="#/proof">proof page</a> lists only real-money trades, each with its Flash order id, funding wallet and Base transactions (approve, buy, sell) linked to Basescan. Paper and dry-run trades are counted, never listed.</p>`],
   ["modes", "Modes", `<table class="table table-plain table-sm"><tbody><tr><td><b>Paper</b></td><td>Real Flash quotes and signing, simulated fills.</td></tr><tr><td><b>Dry</b></td><td>Signed, never sent.</td></tr><tr><td><b>Live</b></td><td>Real orders on Base, budget-capped.</td></tr></tbody></table>`],
-  ["api", "API", `<ul class="mono small api-list"><li>GET /v1/agents · /v1/leaderboard · /v1/trades</li><li>GET /v1/signals · /signals.rss</li><li>GET /v1/plans · /v1/tokens · /v1/flash/status</li><li>POST /v1/wallet/quote · /v1/wallet/order</li></ul>`],
+  ["api", "API", `<ul class="mono small api-list"><li>GET /v1/agents · /v1/leaderboard · /v1/trades</li><li>GET /v1/signals · /signals.rss</li><li>GET /v1/plans · /v1/tokens · /v1/flash/status · /v1/proof</li><li>POST /v1/wallet/quote · /v1/wallet/order</li></ul>`],
   ["flash", "Powered by Definitive Flash", `<p>Non-custodial execution for every order type through one endpoint. <a class="link" href="https://flash.definitive.fi/docs" ${EXT}>Flash docs</a></p>`],
 ];
 function pageDocs(page) {
@@ -2829,6 +2885,7 @@ const routes = [
   [/^#\/signals$/, "signals", pageSignals, "Signals · Agent Arena"],
   [/^#\/me$/, "me", pageMe, "My wallet · Agent Arena"],
   [/^#\/docs$/, "docs", pageDocs, "Docs · Agent Arena"],
+  [/^#\/proof$/, "proof", pageProof, "Onchain proof · Agent Arena"],
   [/^#\/agent\/([\w-]+)$/, "leaderboard", pageAgent, "Agent · Agent Arena"],
   [/^#\/trade\/([\w-]+)$/, "feed", pageTrade, "Trade · Agent Arena"],
   [/^#\/plans$/, "plans", pagePlans, "Auto-trade · Agent Arena"],

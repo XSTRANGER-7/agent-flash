@@ -164,13 +164,39 @@ Sign in on the **Operator** page with the `ADMIN_TOKEN` from `.env`.
 2. Fund one wallet, e.g. `trendhunter` (address on the Wallets page), with USDC
    and about $0.30 of ETH **on the Base network**. The ETH pays gas for the
    capped token approvals.
-3. Set `LIVE_AGENTS=false` and `LIVE_BUDGET_USD=3` in `.env`, then run `.\run.ps1 -Mode live`.
-4. Go to Operator → Real-money test, pick the wallet, and press **Run $1 test trade**.
-5. Watch the receipt go quoted → approved → signed → submitted → filled →
+3. Lock the payout first (server stopped): `.\bin\arena.exe payout -wallet trendhunter -to 0xYourMetaMask`.
+   Withdrawals from that wallet can then only go back to you.
+4. Set `LIVE_AGENTS=false` and `LIVE_BUDGET_USD=3` in `.env`, then run `.\run.ps1 -Mode live`.
+5. Go to Operator → Real-money test, pick the wallet, and press **Run $1 test trade**.
+6. Watch the receipt go quoted → approved → signed → submitted → filled →
    bracket active. Then press **Exit now**, or wait for TP/SL.
+7. When the test is good, let the agent trade on its own: `LIVE_AGENTS=true`,
+   a bigger `LIVE_BUDGET_USD` (it counts every live entry ever made), and for a
+   small wallet `MIN_TRADE_USD` / `MAX_POSITION_PCT` (below). Restart in live mode.
+
+Everyone else trades real money from **their own wallet** (page `#/me`): the app
+returns Flash's exact order, their wallet signs it, nothing is held by the server.
+Server sub-wallets hold keys on your machine, so keep them for your own money.
 
 CLI version: `MODE=live ./bin/arena smoke -wallet trendhunter -test`. It signs and
 submits one order, but the server does not track it, so prefer the UI.
+
+Every real order then shows on the **Onchain proof** page (`#/proof`) with its
+Flash order id and Base transactions linked to Basescan.
+
+### Small wallets: pick a size the fees don't eat
+
+Flash quotes are all-in and part of the cost is fixed per order, so small trades
+pay more in %. Check the real numbers before you size anything:
+
+```bash
+./bin/arena costs -sizes 1,2,4,8      # quotes only, nothing is signed or sent
+```
+
+On Nov 6, 2026 a round trip cost about $0.06 at any size from $1 to $8: 5.6% of $1,
+1.5-1.9% of $4, 0.8% of $8. Agents trade 15-20% of their wallet, which on a $9
+wallet is under $2 and fails the 2.5% cost guard. For such a wallet set
+`MIN_TRADE_USD=4` and `MAX_POSITION_PCT=55`, so agents trade $4 at a time.
 
 ### Manual (without the runner)
 
@@ -249,6 +275,7 @@ Public:
 | POST | `/v1/wallet/order` | submit the wallet signatures (`{quoteId, address, entrySignature, bracketSignature}`); verified by ecrecover |
 | GET | `/v1/wallet/{address}` | your own wallet: balances and trades |
 | GET | `/v1/stats` | season totals + your safety limits (used by the app) |
+| GET | `/v1/proof` | real-money trades only, with Flash order ids, funding wallet and Base tx hashes (page `#/proof`); paper and dry-run trades are counted, never listed |
 | POST | `/v1/predictions` | `{tradeId, voter, win}` one vote per voter |
 | GET | `/v1/approvals/{id}` | status for the approval screen |
 | POST | `/v1/approvals/{id}/world` | World Agent Pass result, verified server-side |

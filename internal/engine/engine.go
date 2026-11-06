@@ -167,6 +167,12 @@ func (e *Engine) Propose(ctx context.Context, in referee.Intent) Result {
 	}
 	if in.SizeUSD == 0 {
 		in.SizeUSD = math.Floor(usdc*in.SizePct/100*100) / 100
+		// Small wallet: a % slice would be eaten by Flash's fixed cost per
+		// order, so trade the minimum instead when the wallet holds it. The
+		// referee still applies MAX_POSITION_PCT, the cost guard still runs.
+		if m := e.Cfg.MinTradeUSD; m > 0 && in.SizeUSD < m && usdc >= m {
+			in.SizeUSD = m
+		}
 	}
 	if in.SizeUSD > e.Cfg.MaxTradeUSD {
 		in.SizeUSD = e.Cfg.MaxTradeUSD
