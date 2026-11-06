@@ -67,9 +67,16 @@ type Config struct {
 	// MinTradeUSD raises a %-sized agent / copy trade to at least this much
 	// when the wallet holds it. Flash's cost per order is mostly fixed, so on
 	// a small wallet a 20% slice is too small to pass the cost guard. 0 = off.
-	MinTradeUSD     float64
-	MaxPositionPct  float64
-	MaxTradesPerDay int
+	MinTradeUSD float64
+
+	// Gas tank (wallets.json "gas" section): pays gas for sub-wallets and
+	// relays gasless USDC deposits, so people only ever hold USDC.
+	GasDripETH           float64 // ETH sent to a sub-wallet that runs low (one drip covers many approvals on Base)
+	GasDailyETH          float64 // most ETH the tank may spend in a day (drips + relayed deposits)
+	GasDripsPerWalletDay int     // drips per sub-wallet per day
+	DepositMaxUSD        float64 // largest single gasless deposit
+	MaxPositionPct       float64
+	MaxTradesPerDay      int
 	// Competitive-safety guards (see doc tab 7)
 	MaxPriceDeviationPct float64 // refuse quotes that drift too far from the reference price
 	MinLiquidityUSD      float64 // refuse tokens that may be hard to sell ("can't sell" problem)
@@ -145,6 +152,10 @@ func Load() (*Config, error) {
 		ApprovalTimeout:      dur("APPROVAL_TIMEOUT", 2*time.Minute),
 		MaxTradeUSD:          num("MAX_TRADE_USD", 5),
 		MinTradeUSD:          num("MIN_TRADE_USD", 0),
+		GasDripETH:           num("GAS_DRIP_ETH", 0.00002),
+		GasDailyETH:          num("GAS_TANK_DAILY_ETH", 0.0005),
+		GasDripsPerWalletDay: int(num("GAS_DRIPS_PER_WALLET_DAY", 5)),
+		DepositMaxUSD:        num("DEPOSIT_MAX_USD", 100),
 		MaxPositionPct:       num("MAX_POSITION_PCT", 25),
 		MaxTradesPerDay:      int(num("MAX_TRADES_PER_DAY", 5)),
 		MaxPriceDeviationPct: num("MAX_PRICE_DEVIATION_PCT", 1.5),
@@ -248,6 +259,12 @@ func Load() (*Config, error) {
 	}
 	if c.MinTradeUSD < 0 || c.MinTradeUSD > c.MaxTradeUSD {
 		errs = append(errs, "MIN_TRADE_USD must be 0 (off) or up to MAX_TRADE_USD")
+	}
+	if c.GasDripETH <= 0 || c.GasDripETH > 0.01 || c.GasDailyETH < c.GasDripETH || c.GasDailyETH > 0.1 || c.GasDripsPerWalletDay < 1 {
+		errs = append(errs, "gas tank limits: GAS_DRIP_ETH in (0, 0.01], GAS_TANK_DAILY_ETH in [GAS_DRIP_ETH, 0.1], GAS_DRIPS_PER_WALLET_DAY >= 1")
+	}
+	if c.DepositMaxUSD < 1 || c.DepositMaxUSD > 10000 {
+		errs = append(errs, "DEPOSIT_MAX_USD must be 1-10000")
 	}
 	if c.StreamURL == "" {
 		c.StreamURL = streamURL(c.FlashBaseURL)

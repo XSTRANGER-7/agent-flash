@@ -75,11 +75,9 @@ func (s *Server) walletCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "unknown agent")
 		return
 	}
-	for _, wl := range s.E.Wallets.List("") {
-		if strings.EqualFold(wl.Address(), in.Payout) {
-			writeErr(w, 400, "payout cannot be one of the arena's own sub-wallets")
-			return
-		}
+	if s.E.Wallets.IsArenaAddress(in.Payout) {
+		writeErr(w, 400, "payout cannot be one of the arena's own wallets")
+		return
 	}
 	if in.ID == "" {
 		in.ID = slug(in.Owner) + "-" + in.AgentID
@@ -109,7 +107,15 @@ func (s *Server) walletCreate(w http.ResponseWriter, r *http.Request) {
 	s.E.Feed.Publish(feed.Post{Kind: "follow", AgentID: in.AgentID, Text: fmt.Sprintf("%s %s %s from a new sub-wallet (max $%.2f per trade, $%.2f a day)", in.Owner, verb, s.E.Agents[in.AgentID].Name, f.MaxPerTradeUSD, f.DailyCapUSD)})
 	s.Log.Info("sub-wallet created", "id", nw.ID, "address", nw.Address(), "agent", in.AgentID, "mode", in.Mode)
 	writeJSON(w, 201, map[string]any{"wallet": s.E.Wallet(r.Context(), nw, false),
-		"fund": fmt.Sprintf("Send USDC (and ~$0.30 of ETH for approvals) on the Base network to %s", nw.Address())})
+		"fund": fundHint(s, nw.Address())})
+}
+
+// fundHint: with a gas tank people send only USDC.
+func fundHint(s *Server, addr string) string {
+	if _, ok := s.E.Wallets.GasTank(); ok {
+		return fmt.Sprintf("Send USDC on the Base network to %s (no ETH needed: the arena's gas tank pays gas)", addr)
+	}
+	return fmt.Sprintf("Send USDC (and ~$0.30 of ETH for approvals) on the Base network to %s", addr)
 }
 
 func slug(s string) string {

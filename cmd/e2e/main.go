@@ -78,6 +78,8 @@ func main() {
 	social()
 	section("10. Your own wallet (non-custodial signing)")
 	selfCustody()
+	section("11. Gasless account (sign in, add USDC by signature, invest, withdraw)")
+	gaslessAccount()
 	fmt.Printf("\n%d checks, %d failed, %s\n", total, fails, time.Since(start).Round(time.Second))
 	if fails > 0 {
 		os.Exit(1)
@@ -704,4 +706,104 @@ func firstNonEmptyS(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// --- 11 ----------------------------------------------------------------------
+
+// meDo calls a /v1/me endpoint with a wallet session (no admin token).
+func meDo(method, p string, body any, session string) (int, M) {
+	var rd io.Reader
+	if body != nil {
+		b, _ := json.Marshal(body)
+		rd = bytes.NewReader(b)
+	}
+	req, _ := http.NewRequest(method, *base+p, rd)
+	req.Header.Set("Content-Type", "application/json")
+	if session != "" {
+		req.Header.Set("X-Arena-Session", session)
+	}
+	res, err := (&http.Client{Timeout: 3 * time.Minute}).Do(req)
+	if err != nil {
+		return 0, M{"error": err.Error()}
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
+	var m M
+	_ = json.Unmarshal(raw, &m)
+	if m == nil {
+		m = M{}
+	}
+	return res.StatusCode, m
+}
+
+func signIn(key *evm.PrivateKey) (string, M) {
+	_, n := meDo("POST", "/v1/me/nonce", M{"address": key.Address()}, "")
+	sig, _ := key.Sign(evm.PersonalMessageHash([]byte(s(n, "message"))))
+	body := M{"address": key.Address(), "signature": evm.SigHex(sig)}
+	_, l := meDo("POST", "/v1/me/login", body, "")
+	return s(l, "token"), body
+}
+
+func signTyped(key *evm.PrivateKey, raw string) string {
+	td, err := evm.ParseTypedData(raw)
+	if err != nil {
+		return ""
+	}
+	d, _ := td.Digest()
+	sig, _ := key.Sign(d)
+	return evm.SigHex(sig)
+}
+
+func gaslessAccount() {
+	user, _, _ := evm.GenerateKey()
+	stranger, _, _ := evm.GenerateKey()
+	tok, used := signIn(user)
+	check("wallet sign-in (free message)", strings.HasPrefix(tok, "u_"), user.Address()[:12]+"…")
+	c, _ := meDo("POST", "/v1/me/login", used, "")
+	check("a sign-in message works once", c == 401, fmt.Sprint("replay: HTTP ", c))
+	c, _ = meDo("GET", "/v1/me", nil, "")
+	check("account calls need the session", c == 401, fmt.Sprint("HTTP ", c))
+
+	c, me := meDo("POST", "/v1/me/account", M{}, tok)
+	acct := s(me, "account", "address")
+	check("account created, payout locked to the signer", c == 201 && acct != "" && strings.EqualFold(s(me, "account", "profile", "payout"), user.Address()),
+		fmt.Sprintf("HTTP %d, account %s, payout %s", c, short(acct), short(s(me, "account", "profile", "payout"))))
+	c, again := meDo("POST", "/v1/me/account", M{}, tok)
+	check("same address, same account", c == 200 && s(again, "account", "address") == acct, fmt.Sprint("HTTP ", c))
+	before := f(me, "account", "usdc")
+
+	c, p := meDo("POST", "/v1/me/deposit/prepare", M{"amountUsd": 12}, tok)
+	check("deposit = a USDC EIP-3009 authorization", c == 200 && strings.Contains(s(p, "typedData"), "TransferWithAuthorization") &&
+		strings.EqualFold(s(p, "to"), acct), fmt.Sprintf("$%.2f to %s", f(p, "amountUsd"), short(s(p, "to"))))
+	c, bad := meDo("POST", "/v1/me/deposit", M{"nonce": s(p, "nonce"), "signature": signTyped(stranger, s(p, "typedData"))}, tok)
+	check("someone else's signature is refused", c == 400, errMsg(bad))
+
+	_, p = meDo("POST", "/v1/me/deposit/prepare", M{"amountUsd": 12}, tok)
+	good := M{"nonce": s(p, "nonce"), "signature": signTyped(user, s(p, "typedData"))}
+	c, d := meDo("POST", "/v1/me/deposit", good, tok)
+	after := f(d, "account", "usdc")
+	check("signed deposit lands, no gas from the user", c == 200 && after-before > 11.99 && after-before < 12.01,
+		fmt.Sprintf("tx %s, USDC %.2f -> %.2f", s(d, "tx"), before, after))
+	c, _ = meDo("POST", "/v1/me/deposit", good, tok)
+	check("the same signature cannot be used twice", c == 410, fmt.Sprint("HTTP ", c))
+
+	c, iv := meDo("POST", "/v1/me/invest", M{"agentId": "trendhunter", "mode": "invest", "allocationPct": 25, "maxPerTradeUsd": 5, "dailyCapUsd": 15}, tok)
+	fl, _ := path(iv, "account", "follows").([]any)
+	ok := c == 200 && len(fl) == 1 && s(fl[0], "agentId") == "trendhunter" && s(fl[0], "mode") == "invest"
+	check("invest with an agent from the account", ok, fmt.Sprintf("HTTP %d %s", c, errMsg(iv)))
+
+	stok, _ := signIn(stranger)
+	_, other := meDo("GET", "/v1/me", nil, stok)
+	check("another wallet cannot see or use it", path(other, "account") == nil, "stranger sees no account")
+
+	c, wd := meDo("POST", "/v1/me/withdraw", M{"token": "USDC"}, tok)
+	check("withdraw goes only to the signer's address", c == 200 && strings.EqualFold(s(wd, "to"), user.Address()) && f(wd, "amount") > 0,
+		fmt.Sprintf("HTTP %d, %.2f USDC to %s %s", c, f(wd, "amount"), short(s(wd, "to")), errMsg(wd)))
+}
+
+func short(a string) string {
+	if len(a) > 14 {
+		return a[:6] + "…" + a[len(a)-4:]
+	}
+	return a
 }

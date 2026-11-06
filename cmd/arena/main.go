@@ -84,6 +84,8 @@ func main() {
 		err = simulate()
 	case "costs":
 		err = costs(os.Args[2:])
+	case "gastank":
+		err = gasTankCmd()
 	default:
 		usage()
 		os.Exit(2)
@@ -96,6 +98,7 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "  costs [-sizes 1,2,5]              real Flash round-trip cost per trade size (quotes only)")
+	fmt.Fprintln(os.Stderr, "  gastank                           create / show the gas tank that makes trading gasless for people")
 	fmt.Fprintln(os.Stderr, "  simulate                          onchain checks on real Base state with test money (nothing broadcast)")
 	fmt.Fprintln(os.Stderr, "  reset-paper                       start paper money over (old paper data is kept in a backup folder)")
 	fmt.Fprintln(os.Stderr, "  prune-test-wallets [-dry]         remove EMPTY wallets left by e2e runs (keys kept in a backup file)")
@@ -261,7 +264,20 @@ func doctor(log *slog.Logger) error {
 	if err != nil {
 		bad("wallets", err)
 	} else {
-		doctorWallets(ctx, cfg, fc, rpc, ws.List(""), ok, warn)
+		t, hasTank := ws.GasTank()
+		doctorWallets(ctx, cfg, fc, rpc, ws.List(""), hasTank, ok, warn)
+		switch {
+		case !hasTank:
+			warn("gas tank", "none: every wallet pays its own gas. `arena gastank` makes people's trading gasless")
+		default:
+			if b, err := rpc.ETHBalance(ctx, t.Address()); err != nil {
+				warn("gas tank", t.Address()+"  balance not read: "+err.Error())
+			} else if eth, _ := new(big.Float).Quo(new(big.Float).SetInt(b), big.NewFloat(1e18)).Float64(); eth < 0.0002 && !cfg.Paper {
+				warn("gas tank", fmt.Sprintf("%s  ETH %.6f: low, send ~$1 of ETH on Base", t.Address(), eth))
+			} else {
+				ok("gas tank", fmt.Sprintf("%s  ETH %.6f (pays approvals, withdrawals and gasless deposits)", t.Address(), eth))
+			}
+		}
 	}
 	if fails > 0 {
 		return fmt.Errorf("%d check(s) failed", fails)
@@ -389,6 +405,10 @@ func withEngine(log *slog.Logger, fn func(context.Context, *engine.Engine) error
 		Referee: ref, Approvals: apr, Store: st, Feed: fd, Outbox: ob, Wallets: ws,
 		Prices: pf,
 		Agents: roster,
+	}
+	if t, ok := ws.GasTank(); ok {
+		e.Exec.SetGasTank(t)
+		log.Info("gas tank on: people only need USDC", "address", t.Address(), "dailyEth", cfg.GasDailyETH)
 	}
 	e.TokenFeeds = map[string]*arena.QuoteFeed{}
 	for _, t := range cfg.Tokens[1:] {

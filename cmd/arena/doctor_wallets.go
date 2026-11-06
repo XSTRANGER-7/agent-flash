@@ -51,7 +51,7 @@ type walletLine struct {
 // timeout). Balances are information, not a requirement to start, so a slow
 // read is a warning. Agents and funded wallets get a line each; the rest of
 // a long list is summarised.
-func doctorWallets(ctx context.Context, cfg *config.Config, fc *flash.Client, rpc *evm.RPC, list []*wallet.Wallet,
+func doctorWallets(ctx context.Context, cfg *config.Config, fc *flash.Client, rpc *evm.RPC, list []*wallet.Wallet, tank bool,
 	ok, warn func(name, detail string)) {
 	lines := make([]walletLine, len(list))
 	sem := make(chan struct{}, 6)
@@ -106,8 +106,8 @@ func doctorWallets(ctx context.Context, cfg *config.Config, fc *flash.Client, rp
 			ok("wallet "+id, line+"  (paper mode trades mock USDC)")
 		case !l.isFunded:
 			warn("wallet "+id, line+"  (not funded)")
-		case l.eth < 0.00005:
-			warn("wallet "+id, line+"  (needs a little ETH for approvals)")
+		case l.eth < 0.00005 && !tank:
+			warn("wallet "+id, line+"  (needs a little ETH for approvals, or run `arena gastank`)")
 		case maxTrade < 1:
 			warn("wallet "+id, line+fmt.Sprintf("  (largest trade $%.2f)", maxTrade))
 		default:

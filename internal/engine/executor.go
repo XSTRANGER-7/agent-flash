@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/vikram/agent-arena/internal/config"
@@ -33,6 +34,9 @@ type Executor struct {
 	walletLocks map[string]*sync.Mutex // one in-flight order per wallet (nonce + allowance safety)
 	settlement  *pinSet                // FlashOrder verifyingContract == approve spender
 	vaults      *pinSet                // FlashOrder.message.vault
+
+	tank         *gasTank    // pays gas for sub-wallets (gas.go); nil = wallets pay their own
+	usdcDomainOK atomic.Bool // our EIP-3009 domain matched USDC's DOMAIN_SEPARATOR()
 }
 
 // pinSet is an allowlist, or trust-on-first-use when the allowlist is empty:
@@ -731,6 +735,9 @@ func (e *Executor) cappedApprove(ctx context.Context, w *wallet.Wallet, tx *flas
 	if key == nil {
 		return "", errors.New("remote signer cannot send approve txs from this service")
 	}
+	if err := e.ensureGas(ctx, w, token, newData); err != nil {
+		return "", err
+	}
 	h, err := e.rpc.SendTx(ctx, big.NewInt(e.cfg.ChainID), key, token, newData, nil)
 	if err != nil {
 		return h, err
@@ -844,6 +851,9 @@ func (e *Executor) Transfer(ctx context.Context, w *wallet.Wallet, token, to str
 	l := e.lock(w.ID)
 	l.Lock()
 	defer l.Unlock()
+	if err := e.ensureGas(ctx, w, token, data); err != nil {
+		return "", err
+	}
 	return e.rpc.SendTx(ctx, big.NewInt(e.cfg.ChainID), key, token, data, nil)
 }
 
@@ -868,6 +878,9 @@ func (e *Executor) Revoke(ctx context.Context, w *wallet.Wallet, token string) (
 	l := e.lock(w.ID)
 	l.Lock()
 	defer l.Unlock()
+	if err := e.ensureGas(ctx, w, token, data); err != nil {
+		return "", err
+	}
 	return e.rpc.SendTx(ctx, big.NewInt(e.cfg.ChainID), key, token, data, nil)
 }
 

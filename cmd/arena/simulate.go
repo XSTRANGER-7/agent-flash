@@ -16,7 +16,10 @@ package main
 //     funds", because the fresh wallet has no ETH, so nothing is broadcast).
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -27,6 +30,7 @@ import (
 	"time"
 
 	"github.com/vikram/agent-arena/internal/config"
+	"github.com/vikram/agent-arena/internal/engine"
 	"github.com/vikram/agent-arena/internal/evm"
 	"github.com/vikram/agent-arena/internal/flash"
 )
@@ -207,7 +211,47 @@ func simulate() error {
 		}
 	}
 
-	// 8. Every Flash order type through the same /quote endpoint, each
+	// 8. Gasless deposit (USDC EIP-3009): the person signs, the gas tank (an
+	// address holding no USDC) sends the transfer. Real USDC code via eth_call.
+	fmt.Println("  gasless deposit (USDC transferWithAuthorization, real contract):")
+	ex := engine.NewExecutor(cfg, fc, rpc, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	tank, _, _ := evm.GenerateKey()
+	sub, _, _ := evm.GenerateKey()
+	nb := make([]byte, 32)
+	_, _ = rand.Read(nb)
+	auth := engine.DepositAuth{From: wallet, To: sub.Address(), Value: big.NewInt(7_000_000),
+		ValidBefore: time.Now().Add(time.Hour).Unix(), Nonce: "0x" + hex.EncodeToString(nb)}
+	if dtd, err := evm.ParseTypedData(ex.DepositTypedData(auth)); err != nil {
+		check("EIP-3009 typed data", false, err.Error())
+	} else {
+		ds, _ := dtd.DomainSeparator()
+		onchainDS, derr := rpc.Call(ctx, usdc, []byte{0x36, 0x44, 0xe5, 0x15})
+		check("our deposit domain = USDC's", derr == nil && len(onchainDS) >= 32 && bytes.Equal(ds, onchainDS[:32]), fmt.Sprintf("0x%x", ds))
+		dg, _ := dtd.Digest()
+		good, _ := key.Sign(dg)
+		data, _ := engine.TransferWithAuthCalldata(auth, good)
+		_, err := rpc.CallAs(ctx, tank.Address(), usdc, data, override(usdc, mapSlot(wallet, balSlot), testUSDC))
+		detail := fmt.Sprintf("7 USDC to %s…, sent by %s… (holds no USDC)", sub.Address()[:10], tank.Address()[:10])
+		if err != nil {
+			detail = shortRPC(err)
+		}
+		check("tank sends a signed deposit", err == nil, detail)
+		other, _, _ := evm.GenerateKey()
+		bad, _ := other.Sign(dg)
+		data2, _ := engine.TransferWithAuthCalldata(auth, bad)
+		_, err2 := rpc.CallAs(ctx, tank.Address(), usdc, data2, override(usdc, mapSlot(wallet, balSlot), testUSDC))
+		check("someone else's signature reverts", err2 != nil, shortRPC(err2))
+		big7 := auth
+		big7.Value = big.NewInt(70_000_000) // more than the 25 test USDC
+		dtd2, _ := evm.ParseTypedData(ex.DepositTypedData(big7))
+		dg2, _ := dtd2.Digest()
+		sg3, _ := key.Sign(dg2)
+		data3, _ := engine.TransferWithAuthCalldata(big7, sg3)
+		_, err3 := rpc.CallAs(ctx, tank.Address(), usdc, data3, override(usdc, mapSlot(wallet, balSlot), testUSDC))
+		check("deposit above the balance reverts", err3 != nil, shortRPC(err3))
+	}
+
+	// 9. Every Flash order type through the same /quote endpoint, each
 	// payload checked like the executor checks it before signing.
 	fmt.Println("  order types (real Flash quotes, same endpoint):")
 	orderTypeQuotes(ctx, cfg, fc, wallet, settlement, px, check)

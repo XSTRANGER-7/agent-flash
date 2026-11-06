@@ -113,10 +113,11 @@ function friendlyError(status, data) {
   return reason ? cap(reason) : `Request failed (${status})`;
 }
 
-async function api(path, { method = "GET", body, admin = false, timeout = 20000, quiet401 = false } = {}) {
+async function api(path, { method = "GET", body, admin = false, me = false, timeout = 20000, quiet401 = false } = {}) {
   const headers = { Accept: "application/json" };
   if (body) headers["Content-Type"] = "application/json";
   if (admin) headers.Authorization = "Bearer " + adminToken();
+  if (me) headers["X-Arena-Session"] = meToken();
   const ctl = "AbortController" in window ? new AbortController() : null;
   const timer = ctl ? setTimeout(() => ctl.abort(), timeout) : 0;
   let res;
@@ -135,6 +136,12 @@ async function api(path, { method = "GET", body, admin = false, timeout = 20000,
   let data = null;
   try { data = await res.json(); } catch { /* empty body */ }
   if (!res.ok) {
+    if (res.status === 401 && me) {
+      store.del("arena.me", true);
+      const err = new Error("Sign in with your wallet again.");
+      err.status = 401;
+      throw err;
+    }
     if (res.status === 401 && admin) {
       store.del("arena.admin", true);
       updateChrome();
@@ -2801,14 +2808,161 @@ async function pageProof(page) {
   return { cleanup: () => clearInterval(t), onPost: (p) => { if (/^trade_/.test(p.kind)) render(); } };
 }
 
+/* ---------------- arena account: USDC only, no gas ---------------- */
+// Sign in once (a free message signature), then the account, deposits (a free
+// USDC signature the arena's gas tank sends), investing and withdrawals. The
+// session lives in this tab only (sessionStorage) and belongs to one address.
+function meToken() {
+  const s = store.get("arena.me", null, true);
+  return s && wallet.address && s.addr?.toLowerCase() === wallet.address.toLowerCase() && Date.parse(s.exp) > Date.now() ? s.token : "";
+}
+const utf8Hex = (s) => "0x" + [...new TextEncoder().encode(s)].map((b) => b.toString(16).padStart(2, "0")).join("");
+async function meSignIn() {
+  const addr = await ensureWallet();
+  if (!addr) return false;
+  const { message } = await api("/v1/me/nonce", { method: "POST", body: { address: addr } });
+  const signature = await eth().request({ method: "personal_sign", params: [utf8Hex(message), addr] });
+  const r = await api("/v1/me/login", { method: "POST", body: { address: addr, signature } });
+  store.set("arena.me", { addr: r.address, token: r.token, exp: r.expiresAt }, true);
+  return true;
+}
+
+function accountHTML(d) {
+  const a = d.account, gas = d.gas || {}, paper = d.mode === "paper";
+  const gasLine = paper ? "Paper mode: deposits are checked like real ones, then paper USDC is added."
+    : gas.on && gas.live ? "Gas is paid by Agent Arena. You only hold USDC." : gas.on ? "Gas is paid by Agent Arena in live mode." : "The arena has no gas tank yet, so its wallets pay their own gas.";
+  if (!a) {
+    return `<div class="acct-intro"><p class="eyebrow">Arena account</p><h3>Trade with USDC only. No gas.</h3>
+      <ol class="intro-steps acct-steps"><li><div><b>Create</b><span>Money can only go back to ${esc(short(d.address))}</span></div></li>
+      <li><div><b>Add USDC</b><span>Sign once in your wallet, free</span></div></li><li><div><b>Pick an agent</b><span>It trades for you, stop loss on every order</span></div></li></ol>
+      <button type="button" class="btn btn-primary btn-block" data-acct-create>Create my account</button><p class="footnote">${esc(gasLine)}</p></div>`;
+  }
+  const f = (a.follows || [])[0], paused = a.profile?.paused;
+  const agent = f ? (state.board?.rows || []).find((r) => r.agentId === f.agentId)?.name || f.agentId : "";
+  const link = f ? `${f.mode === "copy" ? "Copying" : "Investing with"} <b>${esc(agent)}</b> · ${f.allocationPct ? esc(f.allocationPct) + "%" : "agent's size"} a trade, max ${esc(usd(f.maxPerTradeUsd))}` : "Not linked to an agent yet";
+  return `<div class="action-row"><div><p class="eyebrow">Arena account ${paused ? '<span class="mini mini-test">Paused</span>' : ""}</p>
+      <p class="addr">${addrLink(a.address)}<span class="muted small">Payout locked to ${esc(short(d.address))}</span></p></div></div>
+    <dl class="statline">
+      <div class="stat"><dt>USDC</dt><dd class="num">${esc(fixed(a.usdc, 2))}</dd></div>
+      <div class="stat"><dt>WETH</dt><dd class="num">${esc(fixed(a.weth, 6))}</dd></div>
+      <div class="stat"><dt>Equity</dt><dd class="num">${esc(usd(a.equityUsd))}</dd></div>
+      <div class="stat"><dt>P&amp;L</dt><dd class="num">${pnlHTML(a.pnlUsd)}</dd></div>
+    </dl>
+    <p class="acct-link">${link}</p>
+    <div class="btn-row"><button type="button" class="btn btn-primary" data-acct-add>Add funds</button>
+      <button type="button" class="btn btn-ghost" data-acct-invest>${f ? "Change agent" : "Pick an agent"}</button>
+      <button type="button" class="btn btn-ghost" data-acct-withdraw ${a.usdc > 0 ? "" : "disabled"}>Withdraw</button>
+      ${f ? `<button type="button" class="btn btn-ghost" data-acct-pause>${paused ? "Resume" : "Pause"}</button>` : ""}</div>
+    <p class="footnote">${esc(gasLine)}</p>
+    ${(a.recent || []).length ? `<ul class="trades section-tight">${a.recent.slice(0, 5).map(tradeRow).join("")}</ul>` : ""}`;
+}
+
+async function renderAccount(box, onChange) {
+  if (!wallet.address) { box.innerHTML = ""; return; }
+  if (!meToken()) {
+    box.innerHTML = `<div class="acct-intro"><p class="eyebrow">Arena account</p><h3>Trade with USDC only. No gas.</h3>
+      <p class="muted small">Sign a free message to prove this wallet is yours.</p><button type="button" class="btn btn-primary btn-block" data-acct-signin>Sign in with wallet</button></div>`;
+    $("[data-acct-signin]", box).addEventListener("click", async (e) => {
+      const done = busy(e.currentTarget, "Check your wallet…");
+      try { await ensureBase(); if (await meSignIn()) await renderAccount(box, onChange); }
+      catch (err) { toast(err?.code ? walletErr(err) : err.message, "err"); } finally { done(); }
+    });
+    return;
+  }
+  let d;
+  try { d = await api("/v1/me", { me: true }); } catch (err) { box.innerHTML = errorState(err); return; }
+  if (!state.board) await loadBoard().catch(() => null);
+  box.innerHTML = accountHTML(d);
+  const act = async (btn, label, fn) => {
+    const done = busy(btn, label);
+    try { await fn(); await renderAccount(box, onChange); onChange?.(); }
+    catch (err) { toast(err?.code ? walletErr(err) : err.message, "err"); } finally { done(); }
+  };
+  $("[data-acct-create]", box)?.addEventListener("click", (e) => act(e.currentTarget, "Creating…", async () => {
+    await api("/v1/me/account", { method: "POST", me: true, body: {} });
+    toast("Account ready. Add USDC to start.", "ok");
+  }));
+  $("[data-acct-add]", box)?.addEventListener("click", () => depositSheet(d, () => renderAccount(box, onChange)));
+  $("[data-acct-invest]", box)?.addEventListener("click", () => investSheet(d, () => renderAccount(box, onChange)));
+  $("[data-acct-withdraw]", box)?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    if (!(await confirmDialog("Withdraw all USDC?", `It goes to your wallet ${short(d.address)}, the only address it can go to. Open trades keep running.`, "Withdraw", { money: true }))) return;
+    await act(btn, "Withdrawing…", async () => {
+      const r = await api("/v1/me/withdraw", { method: "POST", me: true, body: { token: "USDC" }, timeout: 120000 });
+      toast(`Sent ${fixed(r.amount, 2)} USDC to your wallet`, "ok");
+    });
+  });
+  $("[data-acct-pause]", box)?.addEventListener("click", (e) => act(e.currentTarget, "Saving…", async () => {
+    await api(d.account?.profile?.paused ? "/v1/me/resume" : "/v1/me/pause", { method: "POST", me: true, body: {} });
+  }));
+}
+
+function depositSheet(d, after) {
+  const sb = openSheet("Add funds");
+  const max = +d.depositMaxUsd || 100, paper = d.mode === "paper";
+  sb.innerHTML = `<form class="sheet-body" data-dep novalidate>
+      <p class="chips">${paper ? '<span class="mini mini-paper">Paper money</span>' : ""}<span class="mini">No gas</span><span class="mini">USDC on Base</span></p>
+      <div class="field field-gap"><label for="dep-amt">Amount (USDC)</label><input id="dep-amt" name="amt" type="number" min="1" max="${esc(max)}" step="0.01" value="5" inputmode="decimal" required></div>
+      <p class="ticket-preview">You sign a USDC transfer in your wallet (free). Agent Arena sends it and pays the gas.</p>
+      <div class="btn-row sheet-cta"><button class="btn btn-primary btn-block" type="submit">Sign &amp; add</button></div></form>`;
+  const form = $("[data-dep]", sb);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const amt = num(new FormData(form).get("amt"));
+    if (!(amt >= 1 && amt <= max)) { toast(`Enter $1 to $${max}.`, "err"); return; }
+    const done = busy($("button[type=submit]", form), "Check your wallet…");
+    try {
+      await ensureBase();
+      const p = await api("/v1/me/deposit/prepare", { method: "POST", me: true, body: { amountUsd: amt } });
+      const signature = await eth().request({ method: "eth_signTypedData_v4", params: [wallet.address, p.typedData] });
+      const r = await api("/v1/me/deposit", { method: "POST", me: true, body: { nonce: p.nonce, signature }, timeout: 120000 });
+      sheetClose(sheet);
+      toast(r.tx === "paper" ? `Added ${usd(r.amountUsd)} (paper)` : `Added ${usd(r.amountUsd)} USDC, no gas`, "ok");
+      after?.();
+    } catch (err) { toast(err?.code ? walletErr(err) : err.message, "err"); } finally { done(); }
+  });
+}
+
+function investSheet(d, after) {
+  const rows = state.board?.rows || [];
+  const f = (d.account?.follows || [])[0];
+  const maxPos = +d.maxPositionPct || 25, maxTrade = +d.maxTradeUsd || 5;
+  const sb = openSheet("Pick an agent", { wide: true });
+  sb.innerHTML = `<form class="sheet-body" data-inv novalidate>
+      <div class="choice-grid choice-wide">${rows.map((r, i) => `<label class="choice"><input type="radio" name="agentId" value="${esc(r.agentId)}" ${(f ? f.agentId === r.agentId : i === 0) ? "checked" : ""}><span class="choice-body"><b>${esc(r.name)}</b><span class="muted small">Score ${esc(FMT.score(+r.score || 0))} · ${esc(plural(r.trades, "trade"))}</span></span></label>`).join("")}</div>
+      <div class="field field-gap"><span class="label">How</span><div class="seg seg-full" role="radiogroup" aria-label="How">
+        <label><input type="radio" name="mode" value="invest" ${f?.mode !== "copy" ? "checked" : ""}><span>Invest: trade every signal</span></label>
+        <label><input type="radio" name="mode" value="copy" ${f?.mode === "copy" ? "checked" : ""}><span>Copy its trades</span></label></div></div>
+      <div class="form-grid form-3 field-gap">
+        <div class="field"><label for="inv-pct">Per trade (%)</label><input id="inv-pct" name="pct" type="number" min="1" max="${esc(maxPos)}" step="1" value="${esc(f?.allocationPct || Math.min(20, maxPos))}" inputmode="numeric"><span class="hint">Of your USDC, up to ${esc(maxPos)}%</span></div>
+        <div class="field"><label for="inv-max">Max a trade ($)</label><input id="inv-max" name="max" type="number" min="1" max="${esc(maxTrade)}" step="0.5" value="${esc(f?.maxPerTradeUsd || maxTrade)}" inputmode="decimal"></div>
+        <div class="field"><label for="inv-day">Max a day ($)</label><input id="inv-day" name="day" type="number" min="1" step="1" value="${esc(f?.dailyCapUsd || maxTrade * 3)}" inputmode="decimal"></div>
+      </div>
+      <p class="ticket-preview">Every trade has a stop loss. Pause or withdraw any time.</p>
+      <div class="btn-row sheet-cta"><button class="btn btn-primary btn-block" type="submit">Start</button></div></form>`;
+  const form = $("[data-inv]", sb);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const v = new FormData(form);
+    const done = busy($("button[type=submit]", form), "Saving…");
+    try {
+      await api("/v1/me/invest", { method: "POST", me: true, body: { agentId: v.get("agentId"), mode: v.get("mode"), allocationPct: num(v.get("pct")), maxPerTradeUsd: num(v.get("max")), dailyCapUsd: num(v.get("day")) } });
+      sheetClose(sheet); toast("Done. The agent trades for you on its next signal.", "ok"); after?.();
+    } catch (err) { toast(err.message, "err"); } finally { done(); }
+  });
+}
+
 /* ---------------- my wallet ---------------- */
 async function pageMe(page) {
   const draw = async () => {
     page.innerHTML = `<header class="page-head page-head-row"><div><p class="eyebrow" data-reveal>Self-custody</p><h1 data-reveal>My wallet</h1>
         <p class="lede" data-reveal>Your keys stay with you. Flash executes on Base.</p></div>
         ${wallet.address ? '<div class="btn-row"><button type="button" class="btn btn-primary btn-sm" data-me-trade>Trade from my wallet</button><button type="button" class="btn btn-ghost btn-sm" data-me-off>Disconnect</button></div>' : ""}</header>
+      ${wallet.address ? '<section class="panel acct" data-acct aria-label="Arena account"><div class="skel skel-row"></div></section><div class="section-head section"><h2>Your own wallet</h2></div>' : ""}
       <div class="section-tight" data-me></div>`;
     const box = $("[data-me]", page);
+    const acct = $("[data-acct]", page);
+    if (acct) renderAccount(acct);
     if (!wallet.address) {
       box.innerHTML = `<div class="empty" data-reveal><svg class="empty-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="6.5" width="17" height="12" rx="2.5"/><path d="M15.5 12.5h2"/></svg><h3>Connect your wallet to trade on Base</h3><button type="button" class="btn btn-primary" data-me-connect>Connect wallet</button></div>`;
       $("[data-me-connect]", box).addEventListener("click", connectWallet);
@@ -2852,7 +3006,8 @@ const DOCS = [
     <tr><td><b>Trailing stop</b></td><td>Follows the high; sells on a set % pullback.</td></tr>
     <tr><td><b>Stop loss / Take profit</b></td><td>Two separate exit orders after a stop buy; when one fills, the other is cancelled.</td></tr></tbody></table>`],
   ["wallet", "Your own wallet", `<p>Connect any EOA or embedded wallet. The arena returns Flash's exact order; your wallet signs it (EIP-712) and sends capped approvals. No key ever reaches the server.</p>`],
-  ["subwallets", "Sub-wallets & limits", `<ul><li>One wallet per agent, person and plan.</li><li>Pause, loss limit (auto-pause), daily cap.</li><li>Withdraw only to a locked payout address. Revoke Flash allowances onchain.</li></ul>`],
+  ["gasless", "No gas: USDC only", `<ul><li>Flash pays the gas of every order; it is inside the quote.</li><li>Arena account (My wallet): sign in with a free message, then add USDC with one free signature (USDC EIP-3009). The arena's gas tank sends it.</li><li>Approvals and withdrawals of arena wallets are paid by the gas tank, with a daily limit.</li></ul>`],
+  ["subwallets", "Sub-wallets & limits", `<ul><li>One wallet per agent, person and plan. An agent can only trade the wallets given to it, never your main wallet: its key never reaches the server.</li><li>Pause, loss limit (auto-pause), daily cap, capped Flash allowances.</li><li>Withdraw only to the payout address locked at creation (your own wallet). Revoke Flash allowances onchain.</li></ul>`],
   ["safety", "Safety", `<ul><li>Referee: stop loss required, size and position caps, daily limit, one position per wallet, liquidity and risk flags.</li><li>Never blind-sign: chain, contract, vault, tokens, amount and deadline checked.</li><li>Capped approvals; Permit2 refused.</li><li>Price and cost guards; circuit breaker; emergency stop; live budget cap.</li></ul>`],
   ["social", "Social", `<ul><li>Share cards and links with previews for X, Telegram, WhatsApp, TikTok and Instagram.</li><li><a class="link" href="#/signals">Signals</a> feed plus <a class="link" href="/signals.rss">RSS</a>.</li><li>Optional Discord / Telegram bot posts every agent trade.</li><li>Win / lose predictions on every trade.</li></ul>`],
   ["fees", "Fees", `<p>An integrator fee rides on every Flash order (shown on Operator). Flash's own cost is all-in in each quote.</p>`],

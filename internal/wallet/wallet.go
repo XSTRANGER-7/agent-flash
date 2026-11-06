@@ -74,12 +74,62 @@ type Registry struct {
 	mu   sync.RWMutex
 	path string
 	byID map[string]*Wallet
+	gas  *Wallet // the gas tank; never listed, never trades
 }
 
-// fileFormat: {"agents":{"trendhunter":"0xKEY"}, "followers":{"f1":"0xKEY"}}
+// fileFormat: {"agents":{"trendhunter":"0xKEY"}, "followers":{"f1":"0xKEY"}, "gas":{"tank":"0xKEY"}}
 type fileFormat struct {
 	Agents    map[string]string `json:"agents"`
 	Followers map[string]string `json:"followers"`
+	Gas       map[string]string `json:"gas,omitempty"`
+}
+
+// RoleGas is the gas tank: it holds a little ETH and pays gas for the other
+// wallets (approvals, withdrawals, gasless deposits), so people only hold
+// USDC. It is kept out of Get/List so it can never be picked to trade.
+const RoleGas Role = "gas"
+
+// GasTankID is the tank's id in logs and views.
+const GasTankID = "gastank"
+
+// GasTank returns the gas tank, when wallets.json has one.
+func (r *Registry) GasTank() (*Wallet, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.gas, r.gas != nil
+}
+
+// EnsureGasTank adds a gas tank key to the wallets file when it has none and
+// returns its address. The file is rewritten in place (keeps its ACL).
+func EnsureGasTank(path string) (addr string, created bool, err error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", false, err
+	}
+	var f fileFormat
+	if err := json.Unmarshal(b, &f); err != nil {
+		return "", false, err
+	}
+	if k, ok := f.Gas["tank"]; ok {
+		pk, err := evm.NewPrivateKey(k)
+		if err != nil {
+			return "", false, fmt.Errorf("gas tank key: %w", err)
+		}
+		return pk.Address(), false, nil
+	}
+	pk, hexKey, err := evm.GenerateKey()
+	if err != nil {
+		return "", false, err
+	}
+	if f.Gas == nil {
+		f.Gas = map[string]string{}
+	}
+	f.Gas["tank"] = hexKey
+	out, _ := json.MarshalIndent(f, "", "  ")
+	if err := atomicfile.WriteInPlace(path, out, 0o600); err != nil {
+		return "", false, err
+	}
+	return pk.Address(), true, nil
 }
 
 // Load reads the wallets file. It refuses files readable by group/others.
@@ -134,7 +184,35 @@ func Load(path string) (*Registry, error) {
 			return nil, err
 		}
 	}
+	if k, ok := f.Gas["tank"]; ok {
+		pk, err := evm.NewPrivateKey(k)
+		if err != nil {
+			return nil, fmt.Errorf("gas tank: %w", err)
+		}
+		r.gas = &Wallet{ID: GasTankID, Role: RoleGas, Signer: &LocalSigner{k: pk}}
+		for _, w := range r.byID {
+			if strings.EqualFold(w.Address(), pk.Address()) {
+				return nil, fmt.Errorf("gas tank key is also wallet %s; give the tank its own key", w.ID)
+			}
+		}
+	}
 	return r, nil
+}
+
+// IsArenaAddress is true for any address whose key this service holds
+// (sub-wallets and the gas tank).
+func (r *Registry) IsArenaAddress(addr string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.gas != nil && strings.EqualFold(r.gas.Address(), addr) {
+		return true
+	}
+	for _, w := range r.byID {
+		if w.Role != RoleSelf && strings.EqualFold(w.Address(), addr) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Registry) Get(id string) (*Wallet, bool) {
@@ -282,6 +360,9 @@ func (r *Registry) Watch(addr string) (*Wallet, error) {
 		if strings.EqualFold(w.Address(), checksum) {
 			return nil, errors.New("that address is one of the arena's own sub-wallets")
 		}
+	}
+	if r.gas != nil && strings.EqualFold(r.gas.Address(), checksum) {
+		return nil, errors.New("that address is the arena's gas tank")
 	}
 	w := &Wallet{ID: id, Role: RoleSelf, Signer: watchSigner{addr: checksum}}
 	r.byID[id] = w

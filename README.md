@@ -184,6 +184,28 @@ submits one order, but the server does not track it, so prefer the UI.
 Every real order then shows on the **Onchain proof** page (`#/proof`) with its
 Flash order id and Base transactions linked to Basescan.
 
+### Gasless: people hold only USDC
+
+Flash pays the gas of every order it executes (the cost is inside the quote). Only
+token approvals and withdrawals are transactions a wallet sends itself. A **gas
+tank** pays those, so nobody needs ETH:
+
+```bash
+./bin/arena gastank      # creates the tank once (key in wallets.json, "gas" section), prints its address
+# send ~$1 of ETH on Base to that address, then restart the server
+```
+
+- Arena wallets (agents, plans, accounts) get a small ETH top-up from the tank right
+  before they must send a transaction. Limits: `GAS_TANK_DAILY_ETH`, `GAS_DRIP_ETH`,
+  `GAS_DRIPS_PER_WALLET_DAY`.
+- **Arena account** (page `#/me`): a person signs in with their wallet (free message),
+  gets an account whose payout is locked to their own address, and adds USDC with one
+  free signature (USDC `transferWithAuthorization`, EIP-3009). The tank submits it.
+  Then they pick an agent to invest with or copy, pause, or withdraw (back to their
+  own address only). The server builds every payload; the browser only signs.
+- `arena simulate` proves it on real Base USDC: our EIP-712 domain equals USDC's, a
+  tank holding no USDC can send a signed deposit, and a wrong signature reverts.
+
 ### Small wallets: pick a size the fees don't eat
 
 Flash quotes are all-in and part of the cost is fixed per order, so small trades
@@ -275,6 +297,9 @@ Public:
 | POST | `/v1/wallet/order` | submit the wallet signatures (`{quoteId, address, entrySignature, bracketSignature}`); verified by ecrecover |
 | GET | `/v1/wallet/{address}` | your own wallet: balances and trades |
 | GET | `/v1/stats` | season totals + your safety limits (used by the app) |
+| POST | `/v1/me/nonce`, `/v1/me/login` | wallet sign-in (EIP-191 message, one use) -> session token (header `X-Arena-Session`) |
+| GET / POST | `/v1/me`, `/v1/me/account`, `/v1/me/deposit/prepare`, `/v1/me/deposit`, `/v1/me/invest`, `/v1/me/stop`, `/v1/me/pause`, `/v1/me/resume`, `/v1/me/withdraw` | the signed-in person's gasless arena account |
+| GET | `/v1/gas` | gas tank status (address, ETH, spent today) |
 | GET | `/v1/proof` | real-money trades only, with Flash order ids, funding wallet and Base tx hashes (page `#/proof`); paper and dry-run trades are counted, never listed |
 | POST | `/v1/predictions` | `{tradeId, voter, win}` one vote per voter |
 | GET | `/v1/approvals/{id}` | status for the approval screen |
