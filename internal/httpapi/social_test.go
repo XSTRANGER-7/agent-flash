@@ -11,10 +11,22 @@ import (
 
 func TestPublicBaseHonoursTheProxy(t *testing.T) {
 	r := httptest.NewRequest("GET", "http://127.0.0.1:8080/s/leaderboard", nil)
+	r.RemoteAddr = "127.0.0.1:50000" // cloudflared on this machine
 	r.Header.Set("X-Forwarded-Proto", "https")
 	r.Header.Set("X-Forwarded-Host", "demo.trycloudflare.com")
 	if got := publicBase(r); got != "https://demo.trycloudflare.com" {
 		t.Fatalf("base %s", got)
+	}
+	// From anywhere else the forwarded headers are ignored, and a host that
+	// is not a plain name never reaches a link.
+	r.RemoteAddr = "203.0.113.9:4000"
+	r.Header.Set("X-Forwarded-Host", "evil.example")
+	if got := publicBase(r); got != "http://127.0.0.1:8080" {
+		t.Fatalf("untrusted forwarded host used: %s", got)
+	}
+	r.Host = "x.example/\"><script>"
+	if got := publicBase(r); got != "http://localhost" {
+		t.Fatalf("odd host used: %s", got)
 	}
 	if money(-1.5) != "-$1.50" || money(75616) != "$75616" {
 		t.Fatalf("money %s %s", money(-1.5), money(75616))

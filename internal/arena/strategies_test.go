@@ -53,3 +53,14 @@ func TestBuildStrategyForPeople(t *testing.T) {
 		t.Fatalf("trend defaults %+v", def)
 	}
 }
+
+// Settings a strategy does not use are dropped, never stored or shown.
+func TestBuildStrategyDropsUnusedSettings(t *testing.T) {
+	_, p, err := BuildStrategy(StrategyParams{Kind: "dip", Fast: -99, Slow: 999999, Streak: -3, Trend: 7, TPPct: 2, SLPct: 1, SizePct: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Fast != 0 || p.Slow != 0 || p.Streak != 0 || p.Trend != 0 || p.Window != 20 || p.DipPct != 1.5 {
+		t.Fatalf("stored %+v", p)
+	}
+}

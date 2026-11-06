@@ -347,9 +347,51 @@ func (r *Registry) Watch(addr string) (*Wallet, error) {
 		return nil, errors.New("not a 0x address")
 	}
 	checksum := evm.ChecksumAddress(b)
-	id := SelfID(checksum)
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// The short id is 40 bits of the address, so someone could grind an
+	// address that takes it first. A clash falls back to the 108-bit id.
+	id := SelfID(checksum)
+	if w, ok := r.byID[id]; ok && !strings.EqualFold(w.Address(), checksum) {
+		id = selfLongID(checksum)
+	}
+	return r.watchLocked(id, checksum)
+}
+
+// SelfFor finds the registered own-wallet entry for an address, under
+// either of its ids.
+func (r *Registry) SelfFor(addr string) (*Wallet, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, id := range []string{SelfID(addr), selfLongID(addr)} {
+		if w, ok := r.byID[id]; ok && strings.EqualFold(w.Address(), addr) {
+			return w, true
+		}
+	}
+	return nil, false
+}
+
+func selfLongID(addr string) string {
+	return "self-" + strings.ToLower(strings.TrimPrefix(addr, "0x"))[:27]
+}
+
+// WatchID re-registers a person's own address under the id it was saved
+// with (on restart), so ids never depend on the order wallets come back in.
+func (r *Registry) WatchID(id, addr string) (*Wallet, error) {
+	b, err := evm.HexToAddressBytes(addr)
+	if err != nil || len(b) != 20 {
+		return nil, errors.New("not a 0x address")
+	}
+	checksum := evm.ChecksumAddress(b)
+	if id != SelfID(checksum) && id != selfLongID(checksum) {
+		return nil, errors.New("wallet id does not match the address")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.watchLocked(id, checksum)
+}
+
+func (r *Registry) watchLocked(id, checksum string) (*Wallet, error) {
 	if w, ok := r.byID[id]; ok {
 		if !strings.EqualFold(w.Address(), checksum) {
 			return nil, errors.New("wallet id clash; use another address")

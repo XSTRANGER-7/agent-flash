@@ -234,7 +234,20 @@ func BuildStrategy(p StrategyParams) (Strategy, StrategyParams, error) {
 	case !in(p.SizePct, 5, 100):
 		return nil, p, fmt.Errorf("size must be 5%%-100%% of the account per trade")
 	}
-	return Tuned{Inner: inner, TPPct: p.TPPct, SLPct: p.SLPct, SizePct: p.SizePct}, p, nil
+	// Keep only the settings this strategy uses, so stray values from the
+	// form are never stored or shown.
+	c := StrategyParams{Kind: p.Kind, TPPct: p.TPPct, SLPct: p.SLPct, SizePct: p.SizePct}
+	switch p.Kind {
+	case "trend":
+		c.Fast, c.Slow = p.Fast, p.Slow
+	case "dip":
+		c.Window, c.DipPct = p.Window, p.DipPct
+	case "contrarian":
+		c.Streak = p.Streak
+	case "pullback":
+		c.Window, c.DipPct, c.Trend = p.Window, p.DipPct, p.Trend
+	}
+	return Tuned{Inner: inner, TPPct: p.TPPct, SLPct: p.SLPct, SizePct: p.SizePct}, c, nil
 }
 
 // DefaultRoster maps wallet ids in wallets.json to strategies.

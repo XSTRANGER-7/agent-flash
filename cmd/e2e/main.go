@@ -523,8 +523,14 @@ func automation() {
 		if len(tr) > 0 {
 			t, _ = tr[0].(M)
 		}
-		check("plan bought cbBTC itself", t != nil && s(t, "token") == "cbBTC" && s(t, "kind") == "plan" && f(t, "sizeUsd") == 10,
-			fmt.Sprintf("$%.0f %s, TP %.2f SL %.2f", f(t, "sizeUsd"), s(t, "token"), f(t, "takeProfit"), f(t, "stopLoss")))
+		if sig := s(p, "plan", "lastSignal"); t == nil && strings.Contains(sig, "cost guard") {
+			// Flash's fixed cost at $10 moves through the day: a refusal by
+			// the cost guard is the guard working, not a failure.
+			fmt.Printf("  SKIP  %-44s %s\n", "plan bought cbBTC itself", sig)
+		} else {
+			check("plan bought cbBTC itself", t != nil && s(t, "token") == "cbBTC" && s(t, "kind") == "plan" && f(t, "sizeUsd") == 10,
+				fmt.Sprintf("$%.0f %s, TP %.2f SL %.2f", f(t, "sizeUsd"), s(t, "token"), f(t, "takeProfit"), f(t, "stopLoss")))
+		}
 		if t != nil {
 			entry := f(t, "entry")
 			check("plan kept its own TP/SL", entry > 0 && abs(f(t, "takeProfit")/entry-1.015) < 0.002 && abs(f(t, "stopLoss")/entry-0.99) < 0.002,
@@ -762,7 +768,7 @@ func meDo(method, p string, body any, session string) (int, M) {
 func signIn(key *evm.PrivateKey) (string, M) {
 	_, n := meDo("POST", "/v1/me/nonce", M{"address": key.Address()}, "")
 	sig, _ := key.Sign(evm.PersonalMessageHash([]byte(s(n, "message"))))
-	body := M{"address": key.Address(), "signature": evm.SigHex(sig)}
+	body := M{"address": key.Address(), "signature": evm.SigHex(sig), "nonce": s(n, "nonce")}
 	_, l := meDo("POST", "/v1/me/login", body, "")
 	return s(l, "token"), body
 }
@@ -821,10 +827,32 @@ func gaslessAccount() {
 	c, _ = meDo("POST", "/v1/me/plans", plan, tok)
 	check("one job per account: plan refused while investing", c == 409, fmt.Sprint("HTTP ", c))
 	meDo("POST", "/v1/me/stop", M{}, tok)
-	c, pl := meDo("POST", "/v1/me/plans", plan, tok)
+	// Paused, then four starts at once: one plan is made, and starting it
+	// keeps the account's pause and loss limit.
+	meDo("POST", "/v1/me/pause", M{}, tok)
+	type made struct {
+		c int
+		m M
+	}
+	results := make(chan made, 4)
+	for i := 0; i < 4; i++ {
+		go func() { c, m := meDo("POST", "/v1/me/plans", plan, tok); results <- made{c, m} }()
+	}
+	var pl M
+	n := 0
+	for i := 0; i < 4; i++ {
+		if r := <-results; r.c == 201 {
+			n, pl = n+1, r.m
+		}
+	}
+	check("four plan starts at once make one plan", n == 1, fmt.Sprintf("%d plans made", n))
+	_, now := meDo("GET", "/v1/me", nil, tok)
+	check("a plan keeps the account's pause and loss limit", path(now, "account", "profile", "paused") == true && f(now, "account", "profile", "lossLimitPct") == 20,
+		fmt.Sprintf("paused %v, loss limit %v%%", path(now, "account", "profile", "paused"), f(now, "account", "profile", "lossLimitPct")))
+	meDo("POST", "/v1/me/resume", M{}, tok)
 	accountID := s(me, "account", "id")
-	check("own auto-trader runs on the account", c == 201 && s(pl, "plan", "walletId") == accountID,
-		fmt.Sprintf("HTTP %d, plan wallet %s %s", c, s(pl, "plan", "walletId"), errMsg(pl)))
+	check("own auto-trader runs on the account", pl != nil && s(pl, "plan", "walletId") == accountID,
+		fmt.Sprintf("plan wallet %s %s", s(pl, "plan", "walletId"), errMsg(pl)))
 	c, _ = meDo("POST", "/v1/me/invest", M{"agentId": "trendhunter", "mode": "invest"}, tok)
 	check("invest refused while the plan runs", c == 409, fmt.Sprint("HTTP ", c))
 	stok, _ := signIn(stranger)
@@ -929,7 +957,12 @@ func communityAgents() {
 	}
 	// Size is 25% of the account (paper accounts start with paper USDC on top
 	// of the $20 deposit), so check the share, not a fixed dollar amount.
+	// The public page shows the last equity sample (one a minute), which a
+	// brand-new agent may not have yet; the owner's view reads live balances.
 	entry, acct := f(own, "entry"), f(get("/v1/agents/"+id), "agent", "equityUsd")
+	if _, mine := meDo("GET", "/v1/me", nil, mtok); f(mine, "account", "equityUsd") > acct {
+		acct = f(mine, "account", "equityUsd")
+	}
 	check("the agent trades its own signal with its rules", entry > 0 && math.Abs(f(own, "stopLoss")-entry*0.99) < entry*0.002 &&
 		f(own, "sizeUsd") > 0 && f(own, "sizeUsd") <= 0.25*acct*1.05+0.01,
 		fmt.Sprintf("$%.2f at %.2f, SL %.2f (%s)", f(own, "sizeUsd"), entry, f(own, "stopLoss"), s(own, "status")))

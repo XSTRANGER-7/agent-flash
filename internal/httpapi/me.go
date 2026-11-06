@@ -29,9 +29,12 @@ import (
 	"net/http"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/vikram/agent-arena/internal/arena"
 	"github.com/vikram/agent-arena/internal/atomicfile"
@@ -103,16 +106,32 @@ type pendingDeposit struct {
 
 var users = struct {
 	sync.Mutex
-	nonces   map[string]userNonce // lower(address) -> sign-in message
+	nonces   map[string]userNonce // nonce -> sign-in message for one address
 	sessions map[string]userSession
 	deposits map[string]pendingDeposit // authorization nonce -> request
 	hits     map[string][]time.Time    // bucket|ip -> request times
 }{nonces: map[string]userNonce{}, sessions: map[string]userSession{}, deposits: map[string]pendingDeposit{}, hits: map[string][]time.Time{}}
 
 type userNonce struct {
-	msg string
-	exp time.Time
+	addr string // lower case
+	msg  string
+	exp  time.Time
 }
+
+// Pending sign-in messages and rate-limit buckets are swept so a flood of
+// requests cannot grow memory without bound.
+const (
+	maxPendingNonces = 20000
+	maxHitBuckets    = 10000
+)
+
+// jobMu serialises the "one job per account" checks (agent, invest/copy,
+// plan) and the unique agent name check with the change they guard, so two
+// requests at once cannot both pass.
+var jobMu sync.Mutex
+
+// nonceRe pulls the nonce out of a sign-in message the client sends back.
+var nonceRe = regexp.MustCompile(`(?m)^Nonce: ([0-9a-f]{16})$`)
 
 const sessionHeader = "X-Arena-Session"
 
@@ -155,7 +174,20 @@ func allow(bucket string, r *http.Request, n int, per time.Duration) bool {
 		return false
 	}
 	users.hits[k] = append(keep, time.Now())
+	if len(users.hits) > maxHitBuckets {
+		sweepHitsLocked()
+	}
 	return true
+}
+
+// sweepHitsLocked drops buckets with no request in the last hour (the
+// longest window any limit uses).
+func sweepHitsLocked() {
+	for k, ts := range users.hits {
+		if len(ts) == 0 || time.Since(ts[len(ts)-1]) > time.Hour {
+			delete(users.hits, k)
+		}
+	}
 }
 
 func checksum(addr string) (string, error) {
@@ -166,10 +198,19 @@ func checksum(addr string) (string, error) {
 	return evm.ChecksumAddress(b), nil
 }
 
-// accountID is the trading account's wallet id for an address.
-func accountID(addr string) string {
+// accountID is the trading account's wallet id for an address: "u-" and
+// 30 hex characters (120 bits, which nobody can grind to take someone
+// else's id). Accounts made before this keep their short 10-character id,
+// used only while it pays out to the same address.
+func (s *Server) accountID(addr string) string {
 	a := strings.ToLower(strings.TrimPrefix(addr, "0x"))
-	return "u-" + a[:10]
+	legacy := "u-" + a[:10]
+	if _, ok := s.E.Wallets.Get(legacy); ok {
+		if p, _ := s.E.Store.Profile(legacy); strings.EqualFold(p.Payout, addr) {
+			return legacy
+		}
+	}
+	return "u-" + a[:30]
 }
 
 // meNonce returns the one-time sign-in message for an address.
@@ -190,12 +231,29 @@ func (s *Server) meNonce(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
+	nonce := randHex(8)
 	msg := fmt.Sprintf("Agent Arena sign-in\n\nAddress: %s\nNonce: %s\nIssued At: %s\n\nThis signature is free. It does not move funds or approve anything.",
-		addr, randHex(8), time.Now().UTC().Format(time.RFC3339))
+		addr, nonce, time.Now().UTC().Format(time.RFC3339))
 	users.Lock()
-	users.nonces[strings.ToLower(addr)] = userNonce{msg: msg, exp: time.Now().Add(10 * time.Minute)}
+	if len(users.nonces) >= maxPendingNonces/2 {
+		for k, v := range users.nonces {
+			if time.Now().After(v.exp) {
+				delete(users.nonces, k)
+			}
+		}
+	}
+	full := len(users.nonces) >= maxPendingNonces
+	if !full {
+		// Keyed by the nonce, not the address: asking for a message for
+		// someone else's address never replaces theirs.
+		users.nonces[nonce] = userNonce{addr: strings.ToLower(addr), msg: msg, exp: time.Now().Add(10 * time.Minute)}
+	}
 	users.Unlock()
-	writeJSON(w, 200, map[string]any{"message": msg})
+	if full {
+		writeErr(w, 429, "sign-in is busy; try again in a minute")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"message": msg, "nonce": nonce})
 }
 
 // meLogin checks the signed message (EIP-191) and opens a 7-day session.
@@ -207,6 +265,8 @@ func (s *Server) meLogin(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Address   string `json:"address"`
 		Signature string `json:"signature"`
+		Nonce     string `json:"nonce"`
+		Message   string `json:"message"`
 	}
 	if err := decode(r, &in); err != nil {
 		writeErr(w, 400, err.Error())
@@ -217,22 +277,53 @@ func (s *Server) meLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
-	users.Lock()
-	n, ok := users.nonces[strings.ToLower(addr)]
-	delete(users.nonces, strings.ToLower(addr)) // one try per message
-	users.Unlock()
-	if !ok || time.Now().After(n.exp) {
-		writeErr(w, 401, "sign-in expired; try again")
-		return
+	nonce := strings.ToLower(strings.TrimSpace(in.Nonce))
+	if m := nonceRe.FindStringSubmatch(in.Message); nonce == "" && m != nil {
+		nonce = m[1]
 	}
 	sig, err := evm.DecodeHex(in.Signature)
 	if err != nil {
 		writeErr(w, 400, "bad signature")
 		return
 	}
-	who, err := evm.RecoverAddress(evm.PersonalMessageHash([]byte(n.msg)), sig)
-	if err != nil || !strings.EqualFold(who, addr) {
+	// The messages this signature may be for: the one named by its nonce,
+	// or (an older app that sends no nonce) the newest few for the address.
+	type cand struct {
+		nonce string
+		n     userNonce
+	}
+	var cands []cand
+	users.Lock()
+	for k, v := range users.nonces {
+		if v.addr == strings.ToLower(addr) && time.Now().Before(v.exp) && (nonce == "" || k == nonce) {
+			cands = append(cands, cand{k, v})
+		}
+	}
+	users.Unlock()
+	if len(cands) == 0 {
+		writeErr(w, 401, "sign-in expired; try again")
+		return
+	}
+	sort.Slice(cands, func(i, j int) bool { return cands[i].n.exp.After(cands[j].n.exp) })
+	used := ""
+	for _, c := range cands[:min(len(cands), 10)] {
+		if who, err := evm.RecoverAddress(evm.PersonalMessageHash([]byte(c.n.msg)), sig); err == nil && strings.EqualFold(who, addr) {
+			used = c.nonce
+			break
+		}
+	}
+	if used == "" {
+		// A wrong signature uses nothing up, so a stranger's bad try can
+		// never cancel the real owner's sign-in.
 		writeErr(w, 401, "the signature is not from "+addr)
+		return
+	}
+	users.Lock()
+	_, fresh := users.nonces[used]
+	delete(users.nonces, used) // a message signs in once
+	users.Unlock()
+	if !fresh { // two logins raced with the same signature
+		writeErr(w, 401, "sign-in expired; try again")
 		return
 	}
 	tok := "u_" + randHex(32)
@@ -247,6 +338,21 @@ func (s *Server) meLogin(w http.ResponseWriter, r *http.Request) {
 	s.saveSessionsLocked()
 	users.Unlock()
 	writeJSON(w, 200, map[string]any{"token": tok, "address": addr, "expiresAt": exp.UTC()})
+}
+
+// sessionAddr is the signed-in address of a request, or "".
+func sessionAddr(r *http.Request) string {
+	tok := r.Header.Get(sessionHeader)
+	if tok == "" {
+		return ""
+	}
+	users.Lock()
+	sess, ok := users.sessions[sessKey(tok)]
+	users.Unlock()
+	if !ok || time.Now().After(sess.Exp) {
+		return ""
+	}
+	return sess.Addr
 }
 
 // me wraps handlers that need a signed-in wallet.
@@ -266,7 +372,7 @@ func (s *Server) me(h func(http.ResponseWriter, *http.Request, string)) http.Han
 
 // myWallet is the caller's account, checked against its locked payout.
 func (s *Server) myWallet(addr string) (*wallet.Wallet, bool, error) {
-	wl, ok := s.E.Wallets.Get(accountID(addr))
+	wl, ok := s.E.Wallets.Get(s.accountID(addr))
 	if !ok {
 		return nil, false, nil
 	}
@@ -305,6 +411,8 @@ var agentNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 _.'-]{1,22}[A-Za-z0
 // invest with it. Every arena rule still applies (stop loss within 5%, size
 // and cost guards, live budget, circuit breaker).
 func (s *Server) meAgent(w http.ResponseWriter, r *http.Request, addr string) {
+	jobMu.Lock()
+	defer jobMu.Unlock()
 	wl, ok, err := s.myWallet(addr)
 	if err != nil || !ok {
 		writeErr(w, 409, "create your account first")
@@ -346,6 +454,26 @@ func (s *Server) meAgent(w http.ResponseWriter, r *http.Request, addr string) {
 	writeJSON(w, 201, s.meView(r.Context(), addr))
 }
 
+// nameKey is an agent name reduced to lower-case letters and numbers.
+func nameKey(n string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r + 32
+		}
+		return -1
+	}, n)
+}
+
+// hiddenRune is a control character or an invisible direction / width mark
+// that could make public text read differently from what it says.
+func hiddenRune(r rune) bool {
+	return unicode.IsControl(r) || (r >= 0x200B && r <= 0x200F) || (r >= 0x202A && r <= 0x202E) ||
+		(r >= 0x2066 && r <= 0x2069) || r == 0xFEFF
+}
+
 // agentRules reads and checks an agent's settings from the request. old is
 // the agent being edited (nil when making a new one): it keeps its name
 // unless a new one is given, and its own name does not count as taken.
@@ -380,12 +508,16 @@ func (s *Server) agentRules(r *http.Request, id, owner string, old *store.UserAg
 	switch {
 	case !agentNameRe.MatchString(name):
 		return store.UserAgent{}, 400, errors.New("name: 3-24 letters, numbers, spaces, - _ . '")
-	case len(tagline) > 80:
+	case !utf8.ValidString(tagline) || utf8.RuneCountInString(tagline) > 80:
 		return store.UserAgent{}, 400, errors.New("tagline: up to 80 characters")
+	case strings.IndexFunc(tagline, hiddenRune) >= 0:
+		return store.UserAgent{}, 400, errors.New("tagline: no control or hidden direction characters")
 	}
+	// "Trend Hunter" or "trend-hunter" would pass for TrendHunter, so names
+	// are compared on letters and numbers only.
 	for pid, p := range s.E.AgentMap() {
-		if pid != id && strings.EqualFold(p.Name, name) {
-			return store.UserAgent{}, 409, errors.New("that name is taken")
+		if pid != id && (nameKey(p.Name) == nameKey(name) || nameKey(pid) == nameKey(name)) {
+			return store.UserAgent{}, 409, errors.New("that name is taken (or too close to an existing agent's)")
 		}
 	}
 	token := strings.ToUpper(strings.TrimSpace(in.Token))
@@ -418,6 +550,8 @@ func (s *Server) agentRules(r *http.Request, id, owner string, old *store.UserAg
 // from its next decision; open trades keep the take profit and stop loss
 // they were placed with.
 func (s *Server) meAgentEdit(w http.ResponseWriter, r *http.Request, addr string, wl *wallet.Wallet) {
+	jobMu.Lock()
+	defer jobMu.Unlock()
 	old, ok := s.E.Store.UserAgent(wl.ID)
 	if !ok {
 		writeErr(w, 404, "your account is not an agent")
@@ -506,7 +640,7 @@ func (s *Server) meAccount(w http.ResponseWriter, r *http.Request, addr string) 
 		writeErr(w, 429, "too many new accounts from here; try later")
 		return
 	}
-	nw, err := s.E.Wallets.Create(accountID(addr))
+	nw, err := s.E.Wallets.Create(s.accountID(addr))
 	if err != nil {
 		writeErr(w, 409, err.Error())
 		return
@@ -568,13 +702,16 @@ func (s *Server) meDeposit(w http.ResponseWriter, r *http.Request, addr string) 
 	}
 	users.Lock()
 	p, ok := users.deposits[in.Nonce]
-	delete(users.deposits, in.Nonce) // one use
+	mine := ok && strings.EqualFold(p.auth.From, addr)
+	if mine {
+		delete(users.deposits, in.Nonce) // one use; someone else's try never spends it
+	}
 	users.Unlock()
 	switch {
 	case !ok || time.Now().After(p.exp):
 		writeErr(w, 410, "this deposit request expired or was used; start again")
 		return
-	case !strings.EqualFold(p.auth.From, addr):
+	case !mine:
 		writeErr(w, 403, "this deposit belongs to another wallet")
 		return
 	}
@@ -598,6 +735,8 @@ func (s *Server) meDeposit(w http.ResponseWriter, r *http.Request, addr string) 
 // meInvest links the account to one agent (invest = trade on every signal,
 // copy = mirror the agent's placed trades), with the person's limits.
 func (s *Server) meInvest(w http.ResponseWriter, r *http.Request, addr string) {
+	jobMu.Lock()
+	defer jobMu.Unlock()
 	wl, ok, err := s.myWallet(addr)
 	if err != nil || !ok {
 		writeErr(w, 409, "create your account first")
@@ -668,6 +807,8 @@ func (s *Server) activePlan(walletID string) (store.Plan, bool) {
 // mePlan starts the person's own auto-trader on their account: same fields
 // as the plan builder; owner, payout and wallet are forced to the caller.
 func (s *Server) mePlan(w http.ResponseWriter, r *http.Request, addr string) {
+	jobMu.Lock()
+	defer jobMu.Unlock()
 	wl, ok, err := s.myWallet(addr)
 	if err != nil || !ok {
 		writeErr(w, 409, "create your account first")
@@ -682,7 +823,7 @@ func (s *Server) mePlan(w http.ResponseWriter, r *http.Request, addr string) {
 		return
 	}
 	var in map[string]any
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&in); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&in); err != nil || in == nil {
 		writeErr(w, 400, "bad plan")
 		return
 	}

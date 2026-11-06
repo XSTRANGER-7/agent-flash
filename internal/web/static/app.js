@@ -16,7 +16,8 @@ const pct = (v, d = 1) => { const n = num(v); if (!Number.isFinite(n)) return "�
 const plural = (n, w) => `${n ?? 0} ${w}${+n === 1 ? "" : "s"}`;
 const price = (v) => { const n = num(v); return Number.isFinite(n) && n > 0 ? "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"; };
 const fixed = (v, d) => { const n = num(v); return Number.isFinite(n) ? n.toFixed(d) : "—"; };
-const signClass = (v) => (num(v) > 0 ? "up" : num(v) < 0 ? "down" : "");
+// Signs are judged at the cent (or 0.01 point), so -0.001 is not shown red.
+const signClass = (v) => { const r = Math.round(num(v) * 100) / 100; return r > 0 ? "up" : r < 0 ? "down" : ""; };
 const short = (a) => (a && a.length > 14 ? a.slice(0, 6) + "…" + a.slice(-4) : a || "");
 const initials = (name) => (name || "?").split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
 const isAddr = (a) => typeof a === "string" && /^0x[0-9a-fA-F]{40}$/.test(a);
@@ -40,7 +41,7 @@ const FMT = {
   cusd: (v) => cusd(v),
   usd0: (v) => usd(v, 0),
   usd2: (v) => usd(v, 2),
-  score: (v) => (v > 0 ? "+" : "") + v.toFixed(2),
+  score: (v) => { const r = Math.round(v * 100) / 100 || 0; return (r > 0 ? "+" : "") + r.toFixed(2); }, // never "-0.00"
   pct1: (v) => pct(v, 1),
   dd: (v) => v.toFixed(1) + "%",
 };
@@ -371,6 +372,9 @@ addEventListener("scroll", onScroll, { passive: true });
 addEventListener("resize", onScroll, { passive: true });
 
 /* ---------------- chrome: toasts, dialog, header ---------------- */
+// One container, kept by reference: a sheet that re-renders its content can
+// drop it from the page, and toastHome puts it back.
+const TOASTS = document.querySelector(".toasts");
 function toast(msg, kind = "", action) {
   const el = document.createElement("div");
   el.className = "toast " + kind;
@@ -383,9 +387,21 @@ function toast(msg, kind = "", action) {
     b.addEventListener("click", () => { action.run(); el.remove(); });
     el.append(b);
   }
-  $(".toasts").append(el);
+  const box = TOASTS;
+  toastHome(box);
+  box.append(el);
   setTimeout(() => el.remove(), action ? 12000 : 4500);
 }
+// A modal sheet sits in the browser's top layer and makes the rest of the
+// page inert, so toasts outside it would be hidden behind it and not read
+// out. While a modal is open the toasts live inside it; they move back to
+// the page as it closes.
+function toastHome(box = TOASTS) {
+  const modal = [...document.querySelectorAll("dialog[open]")].reverse().find((d) => { try { return d.matches(":modal"); } catch { return true; } });
+  const host = modal || document.body;
+  if (box.parentElement !== host) host.append(box);
+}
+document.addEventListener("close", () => toastHome(), true);
 
 // Money actions always show which money they use: paper, dry run or live.
 function confirmDialog(title, body, okLabel = "Confirm", { money = false } = {}) {
@@ -603,7 +619,7 @@ const PROTECTION = { pending: "Waiting for the entry to fill", active: "Take pro
 const ICON_EMPTY = '<svg class="empty-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="3"/><path d="M8 10h8M8 14h5"/></svg>';
 const ICON_ERR = '<svg class="empty-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5.5M12 16.2v.3"/></svg>';
 function emptyState(title, body, cta) {
-  return `<div class="empty">${ICON_EMPTY}<h3>${esc(title)}</h3>${cta ? `<a class="btn btn-ghost btn-sm" href="${esc(cta.href)}">${esc(cta.label)}</a>` : ""}</div>`;
+  return `<div class="empty">${ICON_EMPTY}<h3>${esc(title)}</h3>${body ? `<p class="muted small">${esc(body)}</p>` : ""}${cta ? `<a class="btn btn-ghost btn-sm" href="${esc(cta.href)}">${esc(cta.label)}</a>` : ""}</div>`;
 }
 function errorState(err, retryHash) {
   return `<div class="empty empty-err">${ICON_ERR}<h3>${esc(err.message || "Couldn't load this")}</h3><a class="btn btn-ghost btn-sm" href="${esc(retryHash || location.hash || "#/")}" data-retry>Try again</a></div>`;
@@ -886,7 +902,7 @@ async function pageHome(page) {
     const lb = await loadBoard().catch(() => null), top = lb?.rows?.find((r) => +r.trades > 0) || lb?.rows?.[0];
     if (!top) { card.hidden = true; return; }
     card.innerHTML = `<div class="sc-top"><span class="sc-brand">Agent Arena</span><span class="mini">#${esc(top.rank)}</span></div>
-      <p class="sc-name">${esc(top.name)}</p><p class="sc-score num ${+top.score < 0 ? "down" : "up"}">${esc(FMT.score(+top.score || 0))}</p><p class="sc-sub">Arena Score</p>
+      <p class="sc-name">${esc(top.name)}</p><p class="sc-score num ${signClass(top.score) || "up"}">${esc(FMT.score(+top.score || 0))}</p><p class="sc-sub">Arena Score</p>
       <div class="sc-row num"><span>Return ${esc(pct(top.returnPct))}</span><span>Drop ${esc(fixed(top.maxDrawdownPct, 1))}%</span><span>${esc(plural(top.trades, "trade"))}</span></div>
       <p class="sc-foot">Trades on Base through Definitive Flash</p>`;
     btn?.addEventListener("click", () => openShare({
@@ -1092,8 +1108,10 @@ function equityChart(points) {
     return `<div class="chart-empty"><p class="eyebrow">No curve yet</p><p class="small">The equity curve starts after the first few balance snapshots, about one a minute.</p></div>`;
   }
   const W = 640, H = 240, P = 8;
-  const vals = points.map((p) => p.usd), min = Math.min(...vals), max = Math.max(...vals), span = max - min || 1;
-  const xy = vals.map((v, i) => [P + (i / (vals.length - 1)) * (W - 2 * P), H - P - ((v - min) / span) * (H - 2 * P)]);
+  const vals = points.map((p) => p.usd), min = Math.min(...vals), max = Math.max(...vals);
+  // At least a 2% band: a $0.06 dip on $100 is a flat line, not a crash.
+  const mid = (max + min) / 2, span = Math.max(max - min, Math.abs(mid) * 0.02, 0.01), floor = mid - span / 2;
+  const xy = vals.map((v, i) => [P + (i / (vals.length - 1)) * (W - 2 * P), H - P - ((v - floor) / span) * (H - 2 * P)]);
   const d = xy.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`).join("");
   const tone = vals.at(-1) < vals[0] ? "is-down" : "is-up";
   const grid = [0.25, 0.5, 0.75].map((k) => `<line class="grid-line" x1="0" x2="${W}" y1="${(H * k).toFixed(0)}" y2="${(H * k).toFixed(0)}"/>`).join("");
@@ -1101,6 +1119,25 @@ function equityChart(points) {
     ${grid}<path class="area" d="${d}L${W - P} ${H}L${P} ${H}Z"/><path class="line" pathLength="1" d="${d}"/>
     <line class="cross" data-cross x1="0" x2="0" y1="0" y2="${H}" visibility="hidden"/></svg>
     <div class="chart-axis num"><span>${esc(usd(min))} low</span><span>${esc(usd(max))} high</span></div><div class="tip num" data-tip hidden></div></div>`;
+}
+
+// fieldsOK checks the visible fields of a form against their own limits
+// (min, max, required) and points at the first wrong one, so a person sees
+// every range before the server is asked. Hidden fields are skipped.
+function fieldsOK(form) {
+  for (const el of form.querySelectorAll("input, select, textarea")) {
+    if (el.offsetParent !== null && !el.disabled && !el.checkValidity()) { el.reportValidity(); el.focus(); return false; }
+  }
+  return true;
+}
+
+// placeTip shows a chart tooltip centred over a point (0-1 across the
+// chart) but never past either edge, so it stays on screen on a phone.
+function placeTip(tip, box, frac) {
+  tip.hidden = false;
+  const bw = box.clientWidth, tw = tip.offsetWidth, m = 4;
+  const x = tw + 2 * m >= bw ? bw / 2 : Math.min(bw - tw / 2 - m, Math.max(tw / 2 + m, frac * bw));
+  tip.style.setProperty("left", x.toFixed(0) + "px");
 }
 
 function wireChart(scope, points) {
@@ -1115,9 +1152,8 @@ function wireChart(scope, points) {
     const i = Math.round(k * (points.length - 1));
     const x = 8 + (i / (points.length - 1)) * (640 - 16);
     cross.setAttribute("x1", x); cross.setAttribute("x2", x); cross.setAttribute("visibility", "visible");
-    tip.hidden = false;
-    tip.style.setProperty("left", (i / (points.length - 1)) * 100 + "%");
     tip.textContent = `${usd(points[i].usd)} · ${new Date(points[i].at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`;
+    placeTip(tip, chart, i / (points.length - 1));
   };
   svg.addEventListener("pointermove", move);
   svg.addEventListener("pointerleave", () => { cross.setAttribute("visibility", "hidden"); tip.hidden = true; });
@@ -1425,7 +1461,17 @@ function tradeChartHTML(c) {
   const d = pts.map((p, i) => `${i ? "L" : "M"}${X(p.t).toFixed(1)} ${Y(p.p).toFixed(1)}`).join("");
   const last = pts.at(-1), up = c.entry > 0 ? last.p >= c.entry : last.p >= pts[0].p;
   const at = (t) => { let best = pts[0]; for (const p of pts) { if (Math.abs(p.t - t) < Math.abs(best.t - t)) best = p; } return best.p; };
-  const guide = lines.map(([k, v, label]) => `<line class="tl tl-${k}" x1="${PL}" x2="${W - PR}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"/><text class="tt tt-${k}" x="${W - PR - 4}" y="${(Y(v) - 4).toFixed(1)}" text-anchor="end">${esc(label)} ${esc(price(v))}</text>`).join("");
+  // Labels sit just above their line; close lines would print one label on
+  // top of another, so labels are pushed apart (the lines stay exact).
+  const gap = matchMedia("(max-width: 560px)").matches ? 28 : 15; // a label's line box (font 19 / 10) plus air
+  const labs = lines.map(([k, v, label]) => ({ k, v, label, y: Y(v) - 4 })).sort((a, b) => a.y - b.y);
+  for (let j = 1; j < labs.length; j++) labs[j].y = Math.max(labs[j].y, labs[j - 1].y + gap);
+  const spill = labs.length ? labs.at(-1).y - (H - 2) : 0;
+  if (spill > 0) labs.forEach((l) => { l.y -= spill; });
+  const rise = labs.length ? gap - 4 - labs[0].y : 0;
+  if (rise > 0) labs.forEach((l) => { l.y += rise; });
+  const guide = lines.map(([k, v]) => `<line class="tl tl-${k}" x1="${PL}" x2="${W - PR}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"/>`).join("")
+    + labs.map((l) => `<text class="tt tt-${l.k}" x="${W - PR - 4}" y="${l.y.toFixed(1)}" text-anchor="end">${esc(l.label)} ${esc(price(l.v))}</text>`).join("");
   const start = c.createdAt >= t0 ? `<line class="tl tl-start" x1="${X(c.createdAt).toFixed(1)}" x2="${X(c.createdAt).toFixed(1)}" y1="${PT}" y2="${H - PB}"/>` : "";
   const evs = (c.events || []).filter((e) => e.t >= t0 && e.t <= t1).map((e) => `<circle class="tev tev-${esc(e.kind)}" cx="${X(e.t).toFixed(1)}" cy="${Y(at(e.t)).toFixed(1)}" r="5"><title>${esc(e.label)} · ${esc(clock(new Date(e.t)))}</title></circle>`).join("");
   const now = `<circle class="tnow ${c.open ? "is-live" : ""}" cx="${X(last.t).toFixed(1)}" cy="${Y(last.p).toFixed(1)}" r="5"/>`;
@@ -1464,10 +1510,9 @@ function wireTradeChart(scope, c) {
     for (const p of pts) { if (Math.abs(p.t - t) < Math.abs(best.t - t)) best = p; }
     const x = 6 + ((best.t - t0) / (t1 - t0 || 1)) * (640 - 12);
     cross.setAttribute("x1", x); cross.setAttribute("x2", x); cross.setAttribute("visibility", "visible");
-    tip.hidden = false;
-    tip.style.setProperty("left", Math.min(85, Math.max(15, (x / 640) * 100)) + "%");
     const diff = c.entry > 0 ? ` · ${pct((best.p / c.entry - 1) * 100, 2)} vs buy` : "";
     tip.textContent = `${price(best.p)} · ${clock(new Date(best.t))}${diff}`;
+    placeTip(tip, box, x / 640);
   });
   svg.addEventListener("pointerleave", () => { cross.setAttribute("visibility", "hidden"); tip.hidden = true; });
 }
@@ -1494,11 +1539,12 @@ function renderTrade(body, d) {
   const pnl = t.pnlUsd != null ? usd(t.pnlUsd) : t.status === "filled" ? "Open" : "—";
   const pnlPct = t.pnlUsd != null && t.sizeUsd ? ` (${pct((t.pnlUsd / t.sizeUsd) * 100, 2)})` : "";
   const costPct = known(t.entryCostPct) ? ` · ${fixed(t.entryCostPct, 2)}%` : "";
-  const closeText = reasonText(t.closeCode) || t.closeReason || "";
+  // "Fully filled" is the exit order's own status, not why the trade closed.
+  const closeText = (t.closeCode && t.closeCode !== "REASON_FULLY_FILLED" ? reasonText(t.closeCode) : "") || t.closeReason || reasonText(t.closeCode) || "";
   const self = t.kind === "self";
   const op = isOperator() && !t.dryRun && !self;
   const canCopy = t.kind === "agent" && (t.status === "placed" || t.status === "filled");
-  document.title = `${name} trade · Agent Arena`;
+  document.title = `${/(trade|order|wallet|plan)$/i.test(name) ? name : name + " trade"} · Agent Arena`;
   body.innerHTML = `
     <header class="trade-head">
       <p class="eyebrow" data-reveal>${who} · ${esc(new Date(t.createdAt).toLocaleString())}${t.copyOf ? ` · copy by ${esc(t.walletId)}` : ""}</p>
@@ -1536,7 +1582,7 @@ function renderTrade(body, d) {
           <div><dt>Take profit</dt><dd class="up">▲ ${esc(price(t.takeProfit))}</dd></div>
           <div><dt>Stop loss</dt><dd class="down">▼ ${esc(price(t.stopLoss))}</dd></div>
           <div><dt>Break-even</dt><dd>${esc(price(t.breakEvenPrice))}</dd></div>
-          <div><dt>Protection</dt><dd>${esc(PROTECTION[t.protection] || (t.dryRun ? "Not sent (dry run)" : "—"))}</dd></div>
+          <div><dt>Protection</dt><dd>${esc(ended && t.status === "closed" ? "Done: the position is closed" : PROTECTION[t.protection] || (t.dryRun ? "Not sent (dry run)" : "—"))}</dd></div>
           <div><dt>Order style</dt><dd>${esc(styleLabel(t.style))}${+t.twapMinutes > 0 ? ` · ${esc(t.twapMinutes)} min` : ""}</dd></div>
           ${+t.stopPrice > 0 ? `<div><dt>Stop trigger</dt><dd>${esc(price(t.stopPrice))}</dd></div>` : ""}
           ${closeText ? `<div><dt>Closed because</dt><dd>${esc(closeText)}</dd></div>` : ""}
@@ -1667,6 +1713,7 @@ function sheetOpen(dlg) {
 }
 // Closing slides the sheet away first (220ms), then closes the dialog.
 function sheetClose(dlg) {
+  if (dlg.contains(TOASTS)) document.body.append(TOASTS); // keep "Saved" and the like on screen
   const done = () => { dlg.classList.remove("closing"); dlg.style.removeProperty("transform"); if (dlg.close) dlg.close(); else dlg.removeAttribute("open"); };
   if (!dlg.open || reduceMotion) { done(); return; }
   dlg.classList.add("closing");
@@ -2157,7 +2204,7 @@ function planCard(p, compact = false) {
 }
 
 async function pagePlans(page) {
-  page.innerHTML = `<header class="page-head page-head-row"><div><p class="eyebrow" data-reveal>Auto-trade</p><h1 data-reveal>Your plans</h1>
+  page.innerHTML = `<header class="page-head page-head-row"><div><p class="eyebrow" data-reveal>Auto-trade</p><h1 data-reveal>Auto-trade plans</h1>
       <p class="lede" data-reveal>Pick a coin, a brain and your limits.</p></div>
       <a class="btn btn-primary" href="#/plans/new">Create a plan</a></header>
     <div class="section-tight" data-plans><div class="skel skel-row"></div><div class="skel skel-row"></div></div>`;
@@ -2437,11 +2484,11 @@ function renderPlan(body, d, refresh) {
   const timeShare = end > start ? Math.min(100, Math.max(0, ((Date.now() - start) / (end - start)) * 100)) : 100;
   const op = isOperator(), mode = modeOf();
   // The owner (signed in with the wallet whose account runs the plan) can manage it too.
-  const mine = !op && !!meToken() && !!wallet.address && p.walletId === "u-" + wallet.address.slice(2, 12).toLowerCase();
+  const mine = !op && !!meToken() && !!wallet.address && ownAccountIds(wallet.address).includes(p.walletId);
   document.title = `${p.name} · Agent Arena`;
   body.innerHTML = `
     <header class="plan-head">
-      <div class="plan-head-main"><p class="eyebrow">${esc(p.owner)} · ${esc(p.token)} · ${esc(stratLabel(p.strategy))} · ${esc(styleLabel(p.style))}</p>
+      <div class="plan-head-main"><p class="eyebrow"><span class="nocaps">${esc(p.owner)}</span> · ${esc(p.token)} · ${esc(stratLabel(p.strategy))} · ${esc(styleLabel(p.style))}</p>
         <div class="trade-title"><h1>${esc(p.name)}</h1>${planChip(p.status)}</div>
         ${p.statusReason && !live ? `<p class="muted small status-why">${esc(cap(p.statusReason))}</p>` : ""}</div>
       <div class="btn-row plan-actions">${(op || mine) && !over ? `
@@ -2767,7 +2814,7 @@ function wireInstall(scope) {
 }
 
 function pageNotFound(page) {
-  page.innerHTML = emptyState("This page doesn't exist", "The link may be old or mistyped.", { href: "#/", label: "Go to the arena" });
+  page.innerHTML = `<h1 class="sr-only">Page not found</h1>` + emptyState("This page doesn't exist", "The link may be old or mistyped.", { href: "#/", label: "Go to the arena" });
   return {};
 }
 
@@ -3215,12 +3262,15 @@ function dropSession(addr) {
   store.set("arena.sessions", all);
 }
 const utf8Hex = (s) => "0x" + [...new TextEncoder().encode(s)].map((b) => b.toString(16).padStart(2, "0")).join("");
+// The account wallet ids an address can have: the 30-character id, and the
+// short id of accounts opened before it.
+const ownAccountIds = (addr) => { const a = String(addr || "").slice(2).toLowerCase(); return ["u-" + a.slice(0, 30), "u-" + a.slice(0, 10)]; };
 async function meSignIn() {
   const addr = await ensureWallet();
   if (!addr) return false;
-  const { message } = await api("/v1/me/nonce", { method: "POST", body: { address: addr } });
+  const { message, nonce } = await api("/v1/me/nonce", { method: "POST", body: { address: addr } });
   const signature = await eth().request({ method: "personal_sign", params: [utf8Hex(message), addr] });
-  const r = await api("/v1/me/login", { method: "POST", body: { address: addr, signature } });
+  const r = await api("/v1/me/login", { method: "POST", body: { address: addr, signature, nonce } });
   const all = sessions();
   for (const [k, v] of Object.entries(all)) if (!(Date.parse(v.exp) > Date.now())) delete all[k];
   all[r.address.toLowerCase()] = { token: r.token, exp: r.expiresAt };
@@ -3257,7 +3307,7 @@ function accountHTML(d) {
         : plan ? `<a class="btn btn-ghost" href="#/plan/${enc(plan.id)}">View my plan</a>`
         : `<button type="button" class="btn btn-ghost" data-acct-invest>${f ? "Change agent" : "Pick an agent"}</button>${f ? "" : '<button type="button" class="btn btn-ghost" data-acct-make-agent>Make my own agent</button>'}`}
       <button type="button" class="btn btn-ghost" data-acct-withdraw ${a.usdc > 0 ? "" : "disabled"}>Withdraw</button>
-      ${f ? `<button type="button" class="btn btn-ghost" data-acct-pause>${paused ? "Resume" : "Pause"}</button>` : ""}</div>
+      ${f ? `<button type="button" class="btn btn-ghost" data-acct-pause>${paused ? "Resume" : "Pause"}</button><button type="button" class="btn btn-ghost" data-acct-stop>${f.mode === "copy" ? "Stop copying" : "Stop investing"}</button>` : ""}</div>
     <p class="footnote">${esc(gasLine)}</p>
     ${(a.recent || []).length ? `<ul class="trades section-tight">${a.recent.slice(0, 5).map(tradeRow).join("")}</ul>` : ""}`;
 }
@@ -3301,6 +3351,14 @@ async function renderAccount(box, onChange) {
   $("[data-acct-pause]", box)?.addEventListener("click", (e) => act(e.currentTarget, "Saving…", async () => {
     await api(d.account?.profile?.paused ? "/v1/me/resume" : "/v1/me/pause", { method: "POST", me: true, body: {} });
   }));
+  $("[data-acct-stop]", box)?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    if (!(await confirmDialog("Stop following this agent?", "No new trades are placed for you. An open trade keeps its take profit and stop loss, and your USDC stays in your account.", "Stop"))) return;
+    await act(btn, "Stopping…", async () => {
+      await api("/v1/me/stop", { method: "POST", me: true, body: {} });
+      toast("Stopped. Your account is free to invest, copy, run a plan or become an agent.", "ok");
+    });
+  });
   $("[data-acct-make-agent]", box)?.addEventListener("click", () => agentSheet(() => renderAccount(box, onChange), null, d.account?.usdc));
   $("[data-acct-agent-edit]", box)?.addEventListener("click", () => agentSheet(() => renderAccount(box, onChange), d.agent, d.account?.usdc));
   $("[data-acct-agent-retire]", box)?.addEventListener("click", async (e) => {
@@ -3357,8 +3415,8 @@ const AGENT_KIND = {
 };
 const agentWhen = (r) => ({
   trend: `the ${r.fast}-check average crosses above the ${r.slow}-check one`,
-  dip: `price is ${fixed(r.dipPct, 1)}% below its ${r.window}-check high`,
-  pullback: `price is ${fixed(r.dipPct, 2)}% below its ${r.window}-check high while the ${r.trend}-check average is rising`,
+  dip: `price is ${+(+r.dipPct).toFixed(2)}% below its ${r.window}-check high`,
+  pullback: `price is ${+(+r.dipPct).toFixed(2)}% below its ${r.window}-check high while the ${r.trend}-check average is rising`,
   contrarian: `price falls ${r.streak} checks in a row`,
 }[r.kind || r.strategy] || "");
 
@@ -3452,6 +3510,7 @@ async function agentSheet(after, old = null, usdc = 0) {
   });
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
+    if (!fieldsOK(form)) return;
     const v = read();
     if (v.name.length < 3) { toast("Give your agent a name (3-24 characters).", "err"); $("#ag-name", form).focus(); return; }
     const done = busy($("button[type=submit]", form), old ? "Saving…" : "Launching…");
@@ -3544,6 +3603,7 @@ function investSheet(d, after, pick, mode) {
   const form = $("[data-inv]", sb);
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
+    if (!fieldsOK(form)) return;
     const v = new FormData(form);
     const done = busy($("button[type=submit]", form), "Saving…");
     try {
@@ -3577,7 +3637,7 @@ async function pageMe(page) {
     });
     box.innerHTML = `<div class="skel skel-row"></div>`;
     let d;
-    try { d = await api("/v1/wallet/" + enc(wallet.address)); } catch (err) { box.innerHTML = errorState(err); return; }
+    try { d = await api("/v1/wallet/" + enc(wallet.address), { me: !!meToken() }); } catch (err) { box.innerHTML = errorState(err); return; }
     const trades = d.trades || [];
     box.innerHTML = `<div class="addr">${addrLink(d.address)}<button type="button" class="btn-link" data-copy-me>Copy address</button></div>
       ${d.mode === "paper" ? '<p class="mode-note"><span class="mini mini-paper">Paper money</span><span>Paper USDC to try every flow</span></p>' : ""}

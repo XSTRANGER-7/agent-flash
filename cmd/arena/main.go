@@ -374,8 +374,10 @@ func withEngine(log *slog.Logger, fn func(context.Context, *engine.Engine) error
 	if err != nil {
 		return err
 	}
-	for _, addr := range st.SelfWallets() { // people's own wallets (addresses only, no keys)
-		_, _ = ws.Watch(addr)
+	for id, addr := range st.SelfWallets() { // people's own wallets (addresses only, no keys)
+		if _, err := ws.WatchID(id, addr); err != nil {
+			log.Warn("own wallet not restored", "id", id, "err", err)
+		}
 	}
 	ob, err := outbox.Open(filepath.Join(cfg.DataDir, "outbox"), cfg.ArkivSyncURL, cfg.ArkivSyncToken, log)
 	if err != nil {

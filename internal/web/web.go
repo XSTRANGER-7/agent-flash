@@ -26,8 +26,14 @@ func Handler() http.Handler {
 	files := http.FileServer(http.FS(sub))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
-		if strings.HasPrefix(p, "/v1/") {
-			http.NotFound(w, r) // unknown API path, never the SPA
+		if strings.HasPrefix(p, "/v1/") { // unknown API path, never the SPA
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"message":"not found"}}`))
+			return
+		}
+		if p != "/" && strings.HasSuffix(p, "/") { // no directory listings
+			http.NotFound(w, r)
 			return
 		}
 		h := w.Header()

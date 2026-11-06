@@ -435,6 +435,9 @@ func (e *Engine) maybeMoveStop(ctx context.Context, w *wallet.Wallet, tr store.T
 // ErrNotExitable is returned when a trade has no position to sell.
 var ErrNotExitable = errors.New("trade has no open position to exit")
 
+// ErrTradeNotFound is returned for an unknown trade id.
+var ErrTradeNotFound = errors.New("trade not found")
+
 // ExitPosition cancels the live bracket (if any) and sells the wallet's WETH
 // at market. The result is tracked like any other order.
 func (e *Engine) ExitPosition(ctx context.Context, id string) (*store.Trade, error) {
@@ -607,7 +610,7 @@ func lastFill(o *flash.Order) time.Time {
 func (e *Engine) Rebracket(ctx context.Context, id string, tp, sl float64) (*store.Trade, error) {
 	tr, ok := e.Store.Trade(id)
 	if !ok {
-		return nil, fmt.Errorf("trade %s not found", id)
+		return nil, ErrTradeNotFound
 	}
 	if tr.Status != "filled" || tr.BracketOrderID == "" || tr.ProtectMode == "trailing" || tr.ProtectMode == "separate" {
 		return nil, fmt.Errorf("%w: this trade has no live bracket to change", ErrNotExitable)
@@ -628,6 +631,8 @@ func (e *Engine) Rebracket(ctx context.Context, id string, tp, sl float64) (*sto
 		return nil, fmt.Errorf("the stop must be below and the take profit above the price now ($%.2f)", px)
 	case (px-sl)/px*100 > 5:
 		return nil, errors.New("the stop may be at most 5% below the price")
+	case (tp-px)/px*100 > 20:
+		return nil, errors.New("the take profit may be at most 20% above the price")
 	}
 	tp, sl = round2(tp), round2(sl)
 	if err := e.Exec.MoveStop(ctx, w, tr.BracketOrderID, sl, tp); err != nil {

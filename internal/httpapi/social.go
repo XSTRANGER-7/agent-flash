@@ -9,7 +9,9 @@ import (
 	"encoding/xml"
 	"fmt"
 	"html"
+	"net"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -21,17 +23,36 @@ import (
 	"github.com/vikram/agent-arena/internal/wallet"
 )
 
+var hostRe = regexp.MustCompile(`^[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?$`)
+
 // publicBase is the URL people reached us on (tunnel or proxy aware).
+// Forwarded headers count only from a proxy on this machine (cloudflared),
+// and a host that is not a plain host name is never put into a link.
 func publicBase(r *http.Request) string {
-	scheme := "http"
-	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		ip = r.RemoteAddr
+	}
+	local := net.ParseIP(ip) != nil && net.ParseIP(ip).IsLoopback()
+	scheme, host := "http", r.Host
+	if r.TLS != nil || (local && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")) {
 		scheme = "https"
 	}
-	host := r.Header.Get("X-Forwarded-Host")
-	if host == "" {
-		host = r.Host
+	if f := r.Header.Get("X-Forwarded-Host"); local && f != "" {
+		host = f
+	}
+	if !hostRe.MatchString(host) {
+		host = "localhost"
 	}
 	return scheme + "://" + host
+}
+
+// base is PUBLIC_URL when it is set, else the URL of this request.
+func (s *Server) base(r *http.Request) string {
+	if s.E != nil && s.E.Cfg != nil && s.E.Cfg.PublicURL != "" {
+		return s.E.Cfg.PublicURL
+	}
+	return publicBase(r)
 }
 
 func money(x float64) string {
@@ -98,10 +119,14 @@ func (s *Server) sharePage(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "unknown share")
 		return
 	}
-	base := publicBase(r)
+	base := s.base(r)
 	app := base + "/" + route
 	esc := html.EscapeString
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	h := w.Header()
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Content-Security-Policy", "default-src 'none'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+	h.Set("X-Frame-Options", "DENY")
+	h.Set("Referrer-Policy", "no-referrer")
 	fmt.Fprintf(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>%s</title>
 <meta name="description" content="%s">
 <meta property="og:type" content="website"><meta property="og:site_name" content="Agent Arena">
@@ -194,7 +219,7 @@ type signal struct {
 
 // signals are the agents' own trades, newest first: what followers and bots copy.
 func (s *Server) signalList(r *http.Request, n int) []signal {
-	base := publicBase(r)
+	base := s.base(r)
 	out := []signal{}
 	for _, t := range s.E.Store.Trades("", 0) {
 		p, ok := s.E.AgentMap()[t.AgentID]
@@ -223,7 +248,7 @@ func (s *Server) signals(w http.ResponseWriter, r *http.Request) {
 	if n <= 0 || n > 100 {
 		n = 30
 	}
-	writeJSON(w, 200, map[string]any{"signals": s.signalList(r, n), "rss": publicBase(r) + "/signals.rss"})
+	writeJSON(w, 200, map[string]any{"signals": s.signalList(r, n), "rss": s.base(r) + "/signals.rss"})
 }
 
 func (s *Server) signalsRSS(w http.ResponseWriter, r *http.Request) {
@@ -240,7 +265,7 @@ func (s *Server) signalsRSS(w http.ResponseWriter, r *http.Request) {
 		Desc  string `xml:"description"`
 		Items []item `xml:"item"`
 	}
-	ch := channel{Title: "Agent Arena signals", Link: publicBase(r), Desc: "Every trade the arena's AI agents place on Flash"}
+	ch := channel{Title: "Agent Arena signals", Link: s.base(r), Desc: "Every trade the arena's AI agents place on Flash"}
 	for _, sg := range s.signalList(r, 30) {
 		at, _ := time.Parse(time.RFC3339, sg.At)
 		title := fmt.Sprintf("%s: %s %s %s", sg.Agent, strings.ToUpper(sg.Side), sg.Token, money(sg.SizeUSD))
@@ -301,8 +326,8 @@ func (s *Server) orderTicket(w http.ResponseWriter, r *http.Request) {
 	if in.StopLossPct == 0 {
 		in.StopLossPct = 1
 	}
-	if in.SizeUSD < 1 {
-		writeErr(w, 400, "size must be at least $1")
+	if in.SizeUSD < 1 || in.SizeUSD > s.E.Cfg.MaxTradeUSD {
+		writeErr(w, 400, fmt.Sprintf("size must be $1-$%.0f (the arena's largest trade)", s.E.Cfg.MaxTradeUSD))
 		return
 	}
 	in.Style = firstNonEmpty(in.Style, "market")

@@ -402,8 +402,12 @@ func (st *Store) Predict(p *Prediction) error {
 	if _, dup := st.s.Predictions[k]; dup {
 		return ErrDuplicateVote
 	}
-	if _, ok := st.s.Trades[p.TradeID]; !ok {
+	t, ok := st.s.Trades[p.TradeID]
+	if !ok {
 		return errors.New("trade not found")
+	}
+	if !t.Open() {
+		return errors.New("voting is closed: this trade has finished")
 	}
 	cp := *p
 	st.s.Predictions[k] = &cp

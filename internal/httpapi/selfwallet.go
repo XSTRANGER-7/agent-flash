@@ -6,45 +6,18 @@ package httpapi
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/vikram/agent-arena/internal/referee"
-	"github.com/vikram/agent-arena/internal/wallet"
 )
 
-var quoteHits = struct {
-	sync.Mutex
-	m map[string][]time.Time
-}{m: map[string][]time.Time{}}
-
-// allowQuote: 12 self-custody quotes a minute per client IP.
+// allowQuote: 12 self-custody quotes a minute per client IP (the shared
+// limiter, which trusts a forwarded IP only from the local tunnel).
 func allowQuote(r *http.Request) bool {
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		ip = r.RemoteAddr
-	}
-	if f := r.Header.Get("Cf-Connecting-Ip"); f != "" {
-		ip = f
-	}
-	quoteHits.Lock()
-	defer quoteHits.Unlock()
-	var keep []time.Time
-	for _, t := range quoteHits.m[ip] {
-		if time.Since(t) < time.Minute {
-			keep = append(keep, t)
-		}
-	}
-	if len(keep) >= 12 {
-		quoteHits.m[ip] = keep
-		return false
-	}
-	quoteHits.m[ip] = append(keep, time.Now())
-	return true
+	return allow("quote", r, 12, time.Minute)
 }
 
 func (s *Server) selfQuote(w http.ResponseWriter, r *http.Request) {
@@ -168,9 +141,19 @@ func (s *Server) selfWallet(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "not an address")
 		return
 	}
-	id := wallet.SelfID(addr)
 	out := map[string]any{"address": addr, "mode": s.E.Cfg.ModeName(), "trades": []any{}}
-	if wl, ok := s.E.Wallets.Get(id); ok && strings.EqualFold(wl.Address(), addr) {
+	wl, ok := s.E.Wallets.SelfFor(addr)
+	if !ok && strings.EqualFold(sessionAddr(r), addr) {
+		// The signed-in owner looking at their own wallet: watch it so its
+		// balances show before a first trade (a stranger's lookup never
+		// registers anything).
+		if nw, err := s.E.Wallets.Watch(addr); err == nil {
+			s.E.Store.AddSelfWallet(nw.ID, nw.Address())
+			wl, ok = nw, true
+		}
+	}
+	if ok {
+		id := wl.ID
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		defer cancel()
 		v := s.E.Wallet(ctx, wl, false)

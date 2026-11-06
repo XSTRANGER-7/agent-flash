@@ -219,7 +219,9 @@ ok:
 		MaxSlippagePct: in.MaxSlippagePct, MaxTradesPerDay: in.MaxTradesPerDay, LossLimitPct: lossLimit, ExitAtEnd: in.ExitAtEnd,
 		Style: in.Style, LimitPct: in.LimitPct, StopPct: in.StopPct, TwapMinutes: in.TwapMinutes, ProtectMode: in.Protect, TrailPct: in.TrailPct,
 		StartsAt: now, EndsAt: now.Add(time.Duration(in.DurationHours * float64(time.Hour))), Status: "active", CreatedAt: now}
-	s.E.Store.PutProfile(store.WalletProfile{ID: nw.ID, Owner: in.Owner, Payout: in.Payout})
+	if in.WalletID == "" {
+		s.E.Store.PutProfile(store.WalletProfile{ID: nw.ID, Owner: in.Owner, Payout: in.Payout})
+	} // an existing account keeps its profile: pause, its reason and its loss limit
 	s.E.Store.PutPlan(p)
 	if cfg.Paper && s.E.Venue != nil { // demo money: fund the plan's budget
 		if have := s.E.Venue.Balance(nw.Address(), cfg.USDC); have < in.BudgetUSD {

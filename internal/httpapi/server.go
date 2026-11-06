@@ -134,6 +134,15 @@ type statusWriter struct {
 }
 
 func (w *statusWriter) WriteHeader(c int) { w.code = c; w.ResponseWriter.WriteHeader(c) }
+
+// hasGetRoute reports whether the path has a GET route (so another method
+// on it is "not allowed" rather than "not found").
+func hasGetRoute(mux *http.ServeMux, r *http.Request) bool {
+	g := r.Clone(r.Context())
+	g.Method = http.MethodGet
+	_, p := mux.Handler(g)
+	return p != "" && p != "GET /"
+}
 func (w *statusWriter) Flush() {
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
@@ -156,16 +165,33 @@ func (s *Server) middleware(next http.Handler) http.Handler {
 		if o := r.Header.Get("Origin"); o != "" && (origins[o] || origins["*"]) {
 			w.Header().Set("Access-Control-Allow-Origin", o)
 			w.Header().Set("Vary", "Origin")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Arena-Session")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(204)
 			return
 		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if strings.HasPrefix(r.URL.Path, "/v1/me") || strings.HasPrefix(r.URL.Path, "/v1/admin") {
+			w.Header().Set("Cache-Control", "no-store") // personal and operator data
+		}
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		sw := &statusWriter{ResponseWriter: w, code: 200}
+		if mux, ok := next.(*http.ServeMux); ok && strings.HasPrefix(r.URL.Path, "/v1/") {
+			if _, pattern := mux.Handler(r); pattern == "" {
+				// No API route: answer in JSON like every other API error
+				// (the router's own reply is plain text).
+				code := 404
+				if h := w.Header(); r.Method != http.MethodGet && hasGetRoute(mux, r) {
+					code = 405
+					h.Set("Allow", "GET")
+				}
+				writeErr(sw, code, http.StatusText(code))
+				s.Log.Info("http", "method", r.Method, "path", r.URL.Path, "status", code, "ms", time.Since(start).Milliseconds())
+				return
+			}
+		}
 		next.ServeHTTP(sw, r)
 		metrics.Inc("http_requests_total")
 		if !strings.HasSuffix(r.URL.Path, "/stream") {
@@ -393,6 +419,12 @@ func (s *Server) predict(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "tradeId and voter are required")
 		return
 	}
+	// Voter ids are anonymous, so the limit is per client: a burst of made-up
+	// voters from one place cannot stuff a tally.
+	if !allow("vote", r, 30, time.Hour) {
+		writeErr(w, 429, "too many votes from here; try later")
+		return
+	}
 	p := &store.Prediction{TradeID: in.TradeID, Voter: strings.ToLower(in.Voter), Win: in.Win, CreatedAt: time.Now().UTC()}
 	if err := s.E.Store.Predict(p); err != nil {
 		writeErr(w, 409, err.Error())
@@ -473,13 +505,19 @@ func (s *Server) follow(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "unknown agent")
 		return
 	}
-	if f.MaxPerTradeUSD <= 0 || f.MaxPerTradeUSD > s.E.Cfg.MaxTradeUSD {
-		f.MaxPerTradeUSD = s.E.Cfg.MaxTradeUSD
+	if f.Mode == "" {
+		f.Mode = "copy"
 	}
-	if f.DailyCapUSD <= 0 {
-		f.DailyCapUSD = 3 * f.MaxPerTradeUSD
+	if f.Mode != "copy" && f.Mode != "invest" {
+		writeErr(w, 400, "mode must be copy or invest")
+		return
 	}
-	f.FollowerID, f.Active, f.CreatedAt = fw.ID, true, time.Now().UTC()
+	nf, err := s.followFrom(fw.ID, f.AgentID, f.Mode, f.AllocationPct, f.MaxPerTradeUSD, f.DailyCapUSD)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	f = *nf
 	s.E.Store.PutFollow(&f)
 	s.E.Feed.Publish(feed.Post{Kind: "follow", AgentID: f.AgentID, Text: fmt.Sprintf("%s is now copying %s (max $%.2f per trade)", f.FollowerID, f.AgentID, f.MaxPerTradeUSD)})
 	writeJSON(w, 201, f)
@@ -598,8 +636,11 @@ func (s *Server) rebracket(w http.ResponseWriter, r *http.Request) {
 	t, err := s.E.Rebracket(ctx, r.PathValue("id"), in.TakeProfit, in.StopLoss)
 	if err != nil {
 		code := 400
-		if errors.Is(err, engine.ErrNotExitable) {
+		switch {
+		case errors.Is(err, engine.ErrNotExitable):
 			code = 409
+		case errors.Is(err, engine.ErrTradeNotFound):
+			code = 404
 		}
 		writeErr(w, code, err.Error())
 		return
