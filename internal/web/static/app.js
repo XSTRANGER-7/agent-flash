@@ -620,6 +620,55 @@ function moveHTML(agentId, rank) {
 }
 
 /* ---------------- pages ---------------- */
+// Home page content. Icons are inline SVG (stroke = currentColor, CSP safe).
+const ICON = {
+  proof: '<svg viewBox="0 0 24 24"><path d="M6 3.5h12v17l-3-2-3 2-3-2-3 2z"/><path d="M9 8.5h6M9 12h6M9 15.5h3"/></svg>',
+  shield: '<svg viewBox="0 0 24 24"><path d="M12 3 5 6v5.5c0 4.4 3 7.9 7 9.5 4-1.6 7-5.1 7-9.5V6z"/><path d="m9 12 2 2 4-4"/></svg>',
+  fuel: '<svg viewBox="0 0 24 24"><path d="M12 3.5s-5.5 6.3-5.5 10.2A5.5 5.5 0 0 0 12 19.2a5.5 5.5 0 0 0 5.5-5.5C17.5 9.8 12 3.5 12 3.5z"/><path d="M4 4l16 16"/></svg>',
+  copy: '<svg viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5"/><path d="M15.5 8.5V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7.5a2 2 0 0 0 2 2h2.5"/></svg>',
+  spark: '<svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/><circle cx="12" cy="12" r="2.5"/></svg>',
+  share: '<svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.5"/><circle cx="17.5" cy="6" r="2.5"/><circle cx="17.5" cy="18" r="2.5"/><path d="m8.3 10.8 7-3.6M8.3 13.2l7 3.6"/></svg>',
+  bolt: '<svg viewBox="0 0 24 24"><path d="M13 3 5 13.5h6L10 21l8-10.5h-6z"/></svg>',
+  chart: '<svg viewBox="0 0 24 24"><path d="M4 19h16"/><path d="m5 15 4-4 3 3 6-7"/><path d="M15 7h3v3"/></svg>',
+};
+const WHY = [
+  ["proof", "Real trades, real proof", "Every order goes through Definitive Flash on Base. Each one links to its Flash order and its Basescan transaction.", "#/proof", "See the proof"],
+  ["shield", "Your money, your limits", "Your own sub-wallet, a stop loss on every trade, a daily cap and a loss limit that pauses it. Withdrawals only go to you.", "#/me", "Open my wallet"],
+  ["fuel", "No gas to worry about", "Add USDC with one free signature. Flash pays the gas of every order and the arena pays the approvals.", "#/me", "Add funds"],
+  ["copy", "Copy or invest in a tap", "Mirror an agent's trades or trade every signal, with your own size, daily cap and pause button.", "#/leaderboard", "Pick an agent"],
+  ["spark", "Build your own agent", "Pick a brain, a coin, a target and a stop. Test it on real onchain prices with Flash's real costs before it goes live.", "#/me", "Make my agent"],
+  ["share", "Social by design", "A risk-adjusted leaderboard, share cards, predictions, watch alerts and public signals.", "#/signals", "Live signals"],
+];
+const STEPS = [
+  ["Connect your wallet", "MetaMask, Coinbase Wallet or Rabby on Base. Sign in with a free message."],
+  ["Add USDC, no gas", "One free signature moves USDC into your own Arena account. Only you can withdraw it."],
+  ["Pick or make an agent", "Copy a leader from the leaderboard, or build your own and test it on real prices."],
+  ["Watch, share, withdraw", "Live charts for every open trade. Pause or withdraw to your wallet whenever you like."],
+];
+const FLOW = [
+  ["spark", "Signal", "A strategy reads the onchain price every 15 seconds and decides to buy."],
+  ["shield", "Referee", "Stop loss, size, daily limit, liquidity, price and cost checks. Anything off is blocked before signing."],
+  ["bolt", "Flash executes", "The order is checked field by field, signed and sent to Definitive Flash with a take-profit and stop-loss bracket."],
+  ["copy", "Followers copy", "Copiers and investors get the same trade in their own sub-wallets, within their own limits."],
+  ["chart", "Exit and proof", "The bracket closes the trade. Profit and loss come from Flash's fills, and every step links onchain."],
+];
+const STACK = [
+  ["Definitive Flash", "Execution", "Market, limit, TWAP, stop and bracket orders through one API, gas included."],
+  ["Base", "Chain", "Fast, low-cost Ethereum layer 2. Every trade settles here."],
+  ["Uniswap v3 oracle", "Price check", "An independent onchain price to verify each Flash quote and to backtest rules."],
+  ["USDC · EIP-3009", "Gasless deposits", "You sign once; the arena's gas tank sends the transfer."],
+  ["EIP-712", "No blind signing", "Every order is checked field by field before it is signed."],
+  ["Arkiv", "Public record", "Trades, results and predictions mirrored as open data."],
+];
+const FAQ = [
+  ["Is this real money?", "It can be. The arena runs in paper mode (mock money with real Flash quotes) or live mode on Base. The badge at the top shows which one you are using."],
+  ["What does a trade cost?", "Flash's all-in cost is part of each quote, usually about $0.02 to $0.05 per order, plus a 0.10% arena fee. Agents skip trades when the cost is too high."],
+  ["Can the arena take my money?", "Withdrawals only go to the address you signed in with, and the app can never change it. Token approvals are capped at the trade size."],
+  ["What if an agent loses?", "Every trade has a stop loss. You set a daily cap and a loss limit that pauses copying. Past results never promise future ones."],
+  ["Can I build my own agent?", "Yes. Sign in, make an agent and test its rules on real onchain prices first. Others can then watch, copy or invest with it."],
+  ["Which coins and chains?", "WETH and cbBTC on Base today. Flash itself supports 14 chains."],
+];
+
 async function pageHome(page) {
   page.innerHTML = `
   <section class="hero hero-ios">
@@ -653,6 +702,17 @@ async function pageHome(page) {
     <p class="footnote"><a class="link" href="#/proof">Onchain proof: real Flash orders with Base transactions</a></p>
   </section>
 
+  <section class="section">
+    <div class="section-head"><div><p class="eyebrow">Why Agent Arena</p><h2>Trading agents you can check, copy and build</h2></div></div>
+    <div class="why-grid" data-stagger>${WHY.map(([ico, title, line, href, cta]) => `<a class="why" href="${href}"><span class="why-ico" aria-hidden="true">${ICON[ico]}</span><h3>${esc(title)}</h3><p>${esc(line)}</p><span class="why-cta">${esc(cta)} ›</span></a>`).join("")}</div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><div><p class="eyebrow">Start in 4 steps</p><h2>From wallet to your first copied trade</h2></div></div>
+    <ol class="steps4" data-stagger>${STEPS.map(([title, line], i) => `<li><span class="steps4-no num">${i + 1}</span><div><h3>${esc(title)}</h3><p>${esc(line)}</p></div></li>`).join("")}</ol>
+    <div class="btn-row"><a class="btn btn-primary" href="#/me">Open my wallet</a><a class="btn btn-ghost" href="#/docs">Read the docs</a></div>
+  </section>
+
   <section class="section auto-teaser" data-auto>
     <div class="section-head"><h2>Auto-traders</h2><a class="btn btn-primary btn-sm" href="#/plans/new">Create</a></div>
     <div class="plan-grid plan-grid-sm" data-auto-list></div>
@@ -661,19 +721,53 @@ async function pageHome(page) {
   <section class="section market" data-market></section>
 
   <section class="section">
-    <div class="section-head"><h2>How a trade runs</h2></div>
-    <ol class="pipeline" data-stagger>
-      <li><span class="step-no">01</span><h3>Signal</h3></li>
-      <li><span class="step-no">02</span><h3>Referee</h3></li>
-      <li><span class="step-no">03</span><h3>Flash executes</h3></li>
-      <li><span class="step-no">04</span><h3>Followers copy</h3></li>
-    </ol>
+    <div class="section-head"><div><p class="eyebrow">Under the hood</p><h2>How a trade runs</h2></div></div>
+    <ol class="flow" data-stagger>${FLOW.map(([ico, title, line]) => `<li><span class="flow-ico" aria-hidden="true">${ICON[ico]}</span><h3>${esc(title)}</h3><p>${esc(line)}</p></li>`).join("")}</ol>
   </section>
 
   <section class="section">
-    <div class="section-head"><h2>Rules</h2>${infoBtn("mode")}</div>
+    <div class="section-head"><div><p class="eyebrow">Built on real DeFi</p><h2>Every piece is onchain or verifiable</h2></div></div>
+    <div class="stack" data-stagger>${STACK.map(([name, role, line]) => `<div class="stack-item"><b>${esc(name)}</b><span class="stack-role">${esc(role)}</span><p>${esc(line)}</p></div>`).join("")}</div>
+  </section>
+
+  <section class="section share-band" data-share-band>
+    <div class="share-copy" data-reveal><p class="eyebrow">Share &amp; follow</p><h2>Every agent and trade has a card</h2>
+      <ul class="ticks"><li>Share cards for agents, trades and plans, with link previews on X, Telegram and Discord</li><li>Watch an agent and get an alert on every trade</li><li>Call it: vote whether a trade hits its target</li><li>Public signals by RSS, Discord and Telegram</li></ul>
+      <div class="btn-row"><button type="button" class="btn btn-primary" data-share-top>Share the top agent</button><a class="btn btn-ghost" href="#/signals">See live signals</a></div></div>
+    <div class="share-card" data-share-card data-reveal aria-hidden="true"></div>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><div><p class="eyebrow">Safety you can check</p><h2>Rules every order passes</h2></div>${infoBtn("mode")}</div>
     <dl class="rules" data-rules data-stagger></dl>
+  </section>
+
+  <section class="section">
+    <div class="section-head"><div><p class="eyebrow">Questions</p><h2>Good to know</h2></div></div>
+    <div class="faq" data-stagger>${FAQ.map(([q, a]) => `<details class="faq-item"><summary>${esc(q)}</summary><p>${esc(a)}</p></details>`).join("")}</div>
+  </section>
+
+  <section class="section cta-band on-lime" data-reveal>
+    <div><h2>Start with $5. Stop any time.</h2><p>Your money stays in your own sub-wallet, and only your address can withdraw it.</p></div>
+    <div class="btn-row"><a class="btn btn-primary" href="#/leaderboard">Pick an agent</a><a class="btn btn-ghost" href="#/me">Make my own</a></div>
   </section>`;
+
+  // Share band: a live card of the current #1 agent.
+  const shareBand = async () => {
+    const card = $("[data-share-card]", page), btn = $("[data-share-top]", page);
+    if (!card) return;
+    const lb = await loadBoard().catch(() => null), top = lb?.rows?.find((r) => +r.trades > 0) || lb?.rows?.[0];
+    if (!top) { card.hidden = true; return; }
+    card.innerHTML = `<div class="sc-top"><span class="sc-brand">Agent Arena</span><span class="mini">#${esc(top.rank)}</span></div>
+      <p class="sc-name">${esc(top.name)}</p><p class="sc-score num ${+top.score < 0 ? "down" : "up"}">${esc(FMT.score(+top.score || 0))}</p><p class="sc-sub">Arena Score</p>
+      <div class="sc-row num"><span>Return ${esc(pct(top.returnPct))}</span><span>Drop ${esc(fixed(top.maxDrawdownPct, 1))}%</span><span>${esc(plural(top.trades, "trade"))}</span></div>
+      <p class="sc-foot">Trades on Base through Definitive Flash</p>`;
+    btn?.addEventListener("click", () => openShare({
+      url: shareURL("agent", top.agentId), text: `${top.name} on Agent Arena · Arena Score ${FMT.score(+top.score || 0)} · AI agent trading on Flash`, file: `arena-${top.agentId}.png`,
+      card: () => drawCard({ title: top.name, big: FMT.score(+top.score || 0), down: +top.score < 0, line: `Return ${pct(top.returnPct)} · Biggest drop ${fixed(top.maxDrawdownPct, 1)}% · Rank ${top.rank}` }),
+    }));
+  };
+  shareBand();
 
   const fill = () => {
     const s = state.stats;
@@ -3103,6 +3197,8 @@ async function agentSheet(after, old = null, usdc = 0) {
   const toks = await api("/v1/tokens").then((d) => d.tokens || []).catch(() => [{ symbol: "WETH" }]);
   const v0 = old || { kind: "pullback", token: toks[0]?.symbol || "WETH", window: 40, dipPct: 0.5, trend: 120, fast: 5, slow: 20, streak: 4, takeProfitPct: 2, stopLossPct: 1.2, sizePct: 50 };
   const val = (k, d) => esc(v0[k] ?? d);
+  const L = state.stats?.limits || {};
+  const lim = (k) => esc(old?.limits?.[k] || "");
   sb.innerHTML = `<form class="sheet-body" data-agent-form novalidate>
       <p class="sheet-text">${old ? "New rules apply from its next decision. Open trades keep their take profit and stop loss." : "It trades its own signals from your account. It shows on the leaderboard, and anyone can watch, copy or invest with it."}</p>
       <div class="form-grid form-2">
@@ -3127,6 +3223,19 @@ async function agentSheet(after, old = null, usdc = 0) {
         <div class="field"><label for="ag-sl">Stop loss (%)</label><input id="ag-sl" name="stopLossPct" type="number" min="0.3" max="5" step="0.1" value="${val("stopLossPct", 1.2)}" inputmode="decimal"><span class="hint">Every trade has one, up to 5%</span></div>
         <div class="field"><label for="ag-size">Per trade (% of your USDC)</label><input id="ag-size" name="sizePct" type="number" min="5" max="100" step="1" value="${val("sizePct", 50)}" inputmode="numeric"><span class="hint" data-ag-usd></span></div>
       </div>
+      <details class="adv" ${old?.limits && Object.keys(old.limits).length ? "open" : ""}><summary>Advanced settings <span class="muted small">optional · blank = the arena's setting</span></summary>
+        <div class="form-grid form-3 field-gap">
+          <div class="field"><label for="ag-cost">Cost limit (%)</label><input id="ag-cost" name="maxCostPct" type="number" min="0.2" max="3" step="0.1" placeholder="${esc(L.maxEntryCostPct ?? "")}" value="${lim("maxCostPct")}" inputmode="decimal"><span class="hint">Skip a trade when Flash's entry cost is above this</span></div>
+          <div class="field"><label for="ag-slip">Max slippage (%)</label><input id="ag-slip" name="slippagePct" type="number" min="0.1" max="3" step="0.1" placeholder="${esc(L.maxSlippage ? fixed(+L.maxSlippage * 100, 1) : "")}" value="${lim("slippagePct")}" inputmode="decimal"></div>
+          <div class="field"><label for="ag-tpd">Trades a day</label><input id="ag-tpd" name="tradesPerDay" type="number" min="1" max="100" step="1" placeholder="${esc(L.maxTradesPerDay ?? "")}" value="${lim("tradesPerDay")}" inputmode="numeric"></div>
+          <div class="field"><label for="ag-min">Smallest trade ($)</label><input id="ag-min" name="minTradeUsd" type="number" min="1" max="${esc(L.maxTradeUsd ?? 100)}" step="0.5" placeholder="${esc(L.minTradeUsd || "")}" value="${lim("minTradeUsd")}" inputmode="decimal"><span class="hint">Small slices are lifted to this</span></div>
+          <div class="field"><label for="ag-max">Largest trade ($)</label><input id="ag-max" name="maxTradeUsd" type="number" min="1" max="${esc(L.maxTradeUsd ?? 100)}" step="0.5" placeholder="${esc(L.maxTradeUsd ?? "")}" value="${lim("maxTradeUsd")}" inputmode="decimal"><span class="hint">Up to the arena's ${esc(usd(L.maxTradeUsd, 0))}</span></div>
+          <div class="field"><label for="ag-cool">Wait after a loss (min)</label><input id="ag-cool" name="cooldownMin" type="number" min="0" max="1440" step="5" placeholder="0" value="${lim("cooldownMin")}" inputmode="numeric"><span class="hint">No new trade for this long</span></div>
+          <div class="field"><label for="ag-net">Raise target to cover costs</label><select id="ag-net" name="netTargets"><option value="">Arena (${L.netTargets ? "on" : "off"})</option><option value="on" ${old?.limits?.netTargets === "on" ? "selected" : ""}>On</option><option value="off" ${old?.limits?.netTargets === "off" ? "selected" : ""}>Off</option></select></div>
+          <div class="field"><label for="ag-be">Stop to break-even halfway</label><select id="ag-be" name="breakEven"><option value="">Arena (${L.breakEvenStop ? "on" : "off"})</option><option value="on" ${old?.limits?.breakEven === "on" ? "selected" : ""}>On</option><option value="off" ${old?.limits?.breakEven === "off" ? "selected" : ""}>Off</option></select></div>
+        </div>
+        <p class="footnote">Fixed for everyone: a stop loss on every trade (within 5%), the arena's largest trade and the live budget.</p>
+      </details>
       <p class="ticket-preview" data-ag-preview></p>
       <section class="bt" data-bt aria-live="polite"></section>
       <div class="btn-row sheet-cta"><button type="button" class="btn btn-ghost" data-bt-run>Test on real prices</button><button class="btn btn-primary" type="submit">${old ? "Save rules" : "Launch my agent"}</button></div></form>`;
@@ -3135,10 +3244,13 @@ async function agentSheet(after, old = null, usdc = 0) {
     const v = new FormData(form), n = (k) => num(v.get(k));
     return { name: String(v.get("name") || "").trim(), tagline: String(v.get("tagline") || "").trim(), strategy: v.get("strategy"), token: v.get("token") || "WETH",
       fast: Math.round(n("fast")), slow: Math.round(n("slow")), dipPct: n("dipPct"), window: Math.round(n("window")), streak: Math.round(n("streak")), trend: Math.round(n("trend")),
-      takeProfitPct: n("takeProfitPct"), stopLossPct: n("stopLossPct"), sizePct: n("sizePct") };
+      takeProfitPct: n("takeProfitPct"), stopLossPct: n("stopLossPct"), sizePct: n("sizePct"),
+      limits: { maxCostPct: n("maxCostPct") || 0, slippagePct: n("slippagePct") || 0, tradesPerDay: Math.round(n("tradesPerDay") || 0),
+        minTradeUsd: n("minTradeUsd") || 0, maxTradeUsd: n("maxTradeUsd") || 0, cooldownMin: Math.round(n("cooldownMin") || 0),
+        netTargets: String(v.get("netTargets") || ""), breakEven: String(v.get("breakEven") || "") } };
   };
   const body = (v) => {
-    const b = { strategy: v.strategy, token: v.token, takeProfitPct: v.takeProfitPct, stopLossPct: v.stopLossPct, sizePct: v.sizePct };
+    const b = { strategy: v.strategy, token: v.token, takeProfitPct: v.takeProfitPct, stopLossPct: v.stopLossPct, sizePct: v.sizePct, limits: v.limits };
     if (v.strategy === "trend") Object.assign(b, { fast: v.fast, slow: v.slow });
     if (v.strategy === "dip") Object.assign(b, { dipPct: v.dipPct, window: v.window });
     if (v.strategy === "pullback") Object.assign(b, { dipPct: v.dipPct, window: v.window, trend: v.trend });
@@ -3195,7 +3307,8 @@ function backtestHTML(r) {
     chart = `<svg class="bt-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Price over the last ${esc(fixed(r.hours, 1))} hours with simulated trades"><path class="line" d="${d}"/>${marks}</svg>
       <div class="chart-axis num"><span>${esc(fixed(r.hours, 1))} h ago · ${esc(price(px[0]))}</span><span>now · ${esc(price(px.at(-1)))}</span></div>`;
   }
-  const verdict = closed === 0 && !r.open ? "No trades: its rules never fired in this period."
+  const verdict = r.costBlocked ? `No trades: Flash's cost at this size is ${fixed(r.costPct, 2)}%, above the ${fixed(r.costLimitPct, 1)}% cost limit. Trade a larger size or raise the limit.`
+    : closed === 0 && !r.open ? "No trades: its rules never fired in this period."
     : closed === 0 ? "One trade, still open: the market did not reach its take profit or stop loss."
     : r.netUsd > 0 ? `Made ${usd(r.netUsd, 3)} after Flash's costs.` : `Lost ${usd(-r.netUsd, 3)} after Flash's costs.`;
   return `<p class="glabel">Test on the last ${esc(fixed(r.hours, 1))} hours of real ${esc(r.token)} prices</p>

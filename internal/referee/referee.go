@@ -37,11 +37,26 @@ type Intent struct {
 	PlanID      string `json:"-"`
 	OwnSize     bool   `json:"-"` // skip MAX_POSITION_PCT (the owner sized it on purpose)
 	MaxSlippage string `json:"-"` // "" = MAX_SLIPPAGE
+	// A community agent's Advanced settings (0 / "" = the arena's):
+	MaxCostPct      float64 `json:"-"`
+	MinTradeUSD     float64 `json:"-"`
+	MaxTradeUSD     float64 `json:"-"`
+	MaxTradesPerDay int     `json:"-"`
+	NetTargets      string  `json:"-"` // on | off
+	BreakEven       string  `json:"-"` // on | off
 
 	// Set by the engine only (never by API callers):
 	Liquidity        float64 `json:"-"` // token USD liquidity from Flash /search
 	RiskFlagged      bool    `json:"-"` // Flash riskFlagged
 	AgentDrawdownPct float64 `json:"-"` // agent's current drawdown from peak equity
+}
+
+// dailyLimit is the arena's trades-a-day limit, or an agent's own one.
+func dailyLimit(arena, own int) int {
+	if own > 0 {
+		return own
+	}
+	return arena
 }
 
 type Policy struct {
@@ -124,7 +139,7 @@ func (r *Referee) Check(in Intent, walletUSDC float64) Decision {
 		return deny("SIZE", "trade is %.0f%% of balance, max %.0f%%", in.SizeUSD/walletUSDC*100, r.p.MaxPositionPct)
 	case in.SizeUSD > walletUSDC:
 		return deny("BALANCE", "insufficient USDC: have $%.2f", walletUSDC)
-	case r.count[in.WalletID] >= r.p.MaxTradesPerDay:
+	case r.count[in.WalletID] >= dailyLimit(r.p.MaxTradesPerDay, in.MaxTradesPerDay):
 		return deny("DAILY_LIMIT", "%d trades today already", r.count[in.WalletID])
 	case r.p.MaxOpenPerAgent > 0 && r.open[in.WalletID] >= r.p.MaxOpenPerAgent:
 		return deny("OPEN_POSITION", "already has %d open position(s)", r.open[in.WalletID])

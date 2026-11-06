@@ -608,7 +608,8 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 		"social": map[string]any{"signalBot": s.E.Cfg.DiscordWebhook != "" || s.E.Cfg.TelegramToken != "", "rss": "/signals.rss"},
 		"limits": map[string]any{"maxTradeUsd": s.E.Cfg.MaxTradeUSD, "minTradeUsd": s.E.Cfg.MinTradeUSD, "maxPositionPct": s.E.Cfg.MaxPositionPct, "approvalThresholdUsd": s.E.Cfg.ApprovalThresholdUSD,
 			"maxApprovalUsd": s.E.Cfg.MaxApprovalUSD, "maxPriceDeviationPct": s.E.Cfg.MaxPriceDeviationPct, "maxAgentDrawdownPct": s.E.Cfg.MaxAgentDrawdownPct,
-			"maxEntryCostPct": s.E.Cfg.MaxEntryCostPct, "maxSlippage": s.E.Cfg.MaxSlippage},
+			"maxEntryCostPct": s.E.Cfg.MaxEntryCostPct, "maxSlippage": s.E.Cfg.MaxSlippage, "maxTradesPerDay": s.E.Cfg.MaxTradesPerDay,
+			"netTargets": s.E.Cfg.NetTargets, "breakEvenStop": s.E.Cfg.BreakEvenStop},
 	})
 }
 

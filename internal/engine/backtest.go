@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/vikram/agent-arena/internal/arena"
 	"github.com/vikram/agent-arena/internal/flash"
+	"github.com/vikram/agent-arena/internal/store"
 )
 
 // BacktestReport is a backtest plus where its prices and costs came from.
@@ -25,6 +27,9 @@ type BacktestReport struct {
 	SizeUSD         float64   `json:"sizeUsd"`
 	CostPerOrderUSD float64   `json:"costPerOrderUsd"`
 	CostSource      string    `json:"costSource"`
+	CostPct         float64   `json:"costPct"`      // Flash's entry cost at this size, %
+	CostLimitPct    float64   `json:"costLimitPct"` // the cost limit that applies
+	CostBlocked     bool      `json:"costBlocked"`  // every entry would be refused by the cost limit
 }
 
 type btCache struct {
@@ -125,7 +130,7 @@ func (e *Engine) orderCost(ctx context.Context, tokAddr string, usd float64) (fl
 }
 
 // Backtest runs agent rules over real past prices with real Flash costs.
-func (e *Engine) Backtest(ctx context.Context, p arena.StrategyParams, sym string, sizeUSD float64) (BacktestReport, error) {
+func (e *Engine) Backtest(ctx context.Context, p arena.StrategyParams, sym string, sizeUSD float64, l store.AgentLimits) (BacktestReport, error) {
 	strat, _, err := arena.BuildStrategy(p)
 	if err != nil {
 		return BacktestReport{}, err
@@ -144,13 +149,36 @@ func (e *Engine) Backtest(ctx context.Context, p arena.StrategyParams, sym strin
 	if err != nil {
 		return BacktestReport{}, err
 	}
+	if l.MaxTradeUSD > 0 && sizeUSD > l.MaxTradeUSD {
+		sizeUSD = l.MaxTradeUSD
+	}
+	if l.MinTradeUSD > 0 && sizeUSD < l.MinTradeUSD {
+		sizeUSD = l.MinTradeUSD
+	}
 	cost, costSrc := e.orderCost(ctx, tok.Address, sizeUSD)
-	every := int(e.Cfg.AgentEvery / max(e.Cfg.PriceEvery, time.Second))
-	res := arena.Backtest(strat, prices, arena.BacktestOptions{SizeUSD: sizeUSD, CostPerOrder: cost, Every: max(1, every), NetTargets: e.Cfg.NetTargets})
+	every := max(1, int(e.Cfg.AgentEvery/max(e.Cfg.PriceEvery, time.Second)))
+	net := e.Cfg.NetTargets
+	if l.NetTargets != "" {
+		net = l.NetTargets == "on"
+	}
+	limit := e.Cfg.MaxEntryCostPct
+	if l.MaxCostPct > 0 {
+		limit = l.MaxCostPct
+	}
+	costPct := cost / sizeUSD * 100
+	cool := l.CooldownMin * 60 / max(1, int(max(e.Cfg.PriceEvery, time.Second)/time.Second))
+	var res arena.BacktestResult
+	if limit > 0 && costPct > limit {
+		res = arena.Backtest(strat, prices[:1], arena.BacktestOptions{SizeUSD: sizeUSD}) // no trades: every entry is over the cost limit
+		res.Points, res.HoldPct = len(prices), (prices[len(prices)-1]/prices[0]-1)*100
+	} else {
+		res = arena.Backtest(strat, prices, arena.BacktestOptions{SizeUSD: sizeUSD, CostPerOrder: cost, Every: every, NetTargets: net, Cooldown: cool})
+	}
 	step := int(max(e.Cfg.PriceEvery, time.Second) / time.Second)
 	return BacktestReport{BacktestResult: res, Token: tok.Symbol, Prices: prices, StepSec: step,
 		StartAt: time.Now().Add(-time.Duration(len(prices)*step) * time.Second).UTC(), Hours: float64(len(prices)*step) / 3600,
-		PriceSource: src, SizeUSD: sizeUSD, CostPerOrderUSD: cost, CostSource: costSrc}, nil
+		PriceSource: src, SizeUSD: sizeUSD, CostPerOrderUSD: cost, CostSource: costSrc,
+		CostPct: math.Round(costPct*100) / 100, CostLimitPct: limit, CostBlocked: limit > 0 && costPct > limit}, nil
 }
 
 // RunTape records every coin's price each price check (for charts and

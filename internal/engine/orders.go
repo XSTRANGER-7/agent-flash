@@ -364,7 +364,11 @@ func (e *Engine) maybeMoveStop(ctx context.Context, w *wallet.Wallet, tr store.T
 	if tr.ProtectMode == "trailing" || tr.ProtectMode == "separate" {
 		return // a trailing stop moves itself; a lone stop-loss has no bracket legs to PATCH
 	}
-	if !e.Cfg.BreakEvenStop || tr.StopMoved || tr.BracketOrderID == "" || tr.BreakEvenPrice <= 0 || tr.StopLoss >= tr.BreakEvenPrice || tr.TakeProfit <= tr.BreakEvenPrice {
+	on := e.Cfg.BreakEvenStop
+	if tr.BreakEven != "" {
+		on = tr.BreakEven == "on" // the agent maker's own setting
+	}
+	if !on || tr.StopMoved || tr.BracketOrderID == "" || tr.BreakEvenPrice <= 0 || tr.StopLoss >= tr.BreakEvenPrice || tr.TakeProfit <= tr.BreakEvenPrice {
 		return
 	}
 	px := e.Prices.Last()

@@ -78,6 +78,7 @@ type Trade struct {
 	ExitTx         string  `json:"exitTx,omitempty"`         // Base tx hash of the exit fill
 	ApproveTx      string  `json:"approveTx,omitempty"`      // capped USDC approve, when one was needed
 	StopMoved      bool    `json:"stopMoved,omitempty"`      // stop loss moved to break-even (PATCH)
+	BreakEven      string  `json:"breakEven,omitempty"`      // on | off: the agent's own break-even setting ("" = arena)
 
 	Timeline  []Step    `json:"timeline,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
@@ -147,23 +148,38 @@ type snapshot struct {
 // person's arena account (id = that account's wallet id), shows on the
 // leaderboard, and others can copy or invest with it.
 type UserAgent struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Tagline   string    `json:"tagline"`
-	Owner     string    `json:"owner"` // the creator's own address (the account's payout)
-	Kind      string    `json:"kind"`  // trend | dip | contrarian
-	Fast      int       `json:"fast,omitempty"`
-	Slow      int       `json:"slow,omitempty"`
-	Window    int       `json:"window,omitempty"`
-	DipPct    float64   `json:"dipPct,omitempty"`
-	Streak    int       `json:"streak,omitempty"`
-	Trend     int       `json:"trend,omitempty"` // pullback: rising long average (checks)
-	Token     string    `json:"token,omitempty"` // coin it trades (symbol); empty = WETH
-	TPPct     float64   `json:"takeProfitPct"`
-	SLPct     float64   `json:"stopLossPct"`
-	SizePct   float64   `json:"sizePct"`
-	Paused    bool      `json:"paused,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID        string      `json:"id"`
+	Name      string      `json:"name"`
+	Tagline   string      `json:"tagline"`
+	Owner     string      `json:"owner"` // the creator's own address (the account's payout)
+	Kind      string      `json:"kind"`  // trend | dip | contrarian
+	Fast      int         `json:"fast,omitempty"`
+	Slow      int         `json:"slow,omitempty"`
+	Window    int         `json:"window,omitempty"`
+	DipPct    float64     `json:"dipPct,omitempty"`
+	Streak    int         `json:"streak,omitempty"`
+	Trend     int         `json:"trend,omitempty"`  // pullback: rising long average (checks)
+	Token     string      `json:"token,omitempty"`  // coin it trades (symbol); empty = WETH
+	Limits    AgentLimits `json:"limits,omitempty"` // the maker's Advanced settings
+	TPPct     float64     `json:"takeProfitPct"`
+	SLPct     float64     `json:"stopLossPct"`
+	SizePct   float64     `json:"sizePct"`
+	Paused    bool        `json:"paused,omitempty"`
+	CreatedAt time.Time   `json:"createdAt"`
+}
+
+// AgentLimits are an agent maker's own limits (Advanced settings). Zero or
+// empty means "use the arena's setting" (.env). The server keeps every value
+// inside hard caps; the stop loss and the arena's largest trade never loosen.
+type AgentLimits struct {
+	MaxCostPct   float64 `json:"maxCostPct,omitempty"`   // skip a trade when Flash's entry cost is above this %
+	SlippagePct  float64 `json:"slippagePct,omitempty"`  // max slippage on the order, %
+	TradesPerDay int     `json:"tradesPerDay,omitempty"` // most trades a day
+	MinTradeUSD  float64 `json:"minTradeUsd,omitempty"`  // small slices are lifted to this
+	MaxTradeUSD  float64 `json:"maxTradeUsd,omitempty"`  // never more than this per trade (<= arena max)
+	CooldownMin  int     `json:"cooldownMin,omitempty"`  // wait this long after a losing trade
+	NetTargets   string  `json:"netTargets,omitempty"`   // "" arena | on | off: raise TP to cover costs
+	BreakEven    string  `json:"breakEven,omitempty"`    // "" arena | on | off: stop to break-even halfway
 }
 
 func (st *Store) PutUserAgent(a UserAgent) {

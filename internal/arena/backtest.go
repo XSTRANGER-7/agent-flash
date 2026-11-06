@@ -14,6 +14,7 @@ type BacktestOptions struct {
 	Every        int     // decide every N price checks (agent cadence / price cadence)
 	NetTargets   bool    // raise TP by 2x the round-trip cost %, like NET_TARGETS
 	Warmup       int     // first price index the strategy may act on
+	Cooldown     int     // after a losing exit, skip this many price checks
 }
 
 type BacktestTrade struct {
@@ -56,7 +57,7 @@ func Backtest(s Strategy, prices []float64, o BacktestOptions) BacktestResult {
 	}
 	orderCost := o.CostPerOrder + o.SizeUSD*o.FeePct/100
 	var open *BacktestTrade
-	run := 0
+	run, waitUntil := 0, 0
 	closeAt := func(i int, px float64, why string) {
 		t := open
 		t.Out, t.OutIndex, t.Exit, t.Why, t.HeldChecks = i, i, px, why, i-t.In
@@ -73,6 +74,7 @@ func Backtest(s Strategy, prices []float64, o BacktestOptions) BacktestResult {
 			r.Losses++
 			run++
 			r.MaxLossRun = max(r.MaxLossRun, run)
+			waitUntil = i + o.Cooldown
 		}
 		r.Trades = append(r.Trades, *t)
 		open = nil
@@ -88,7 +90,7 @@ func Backtest(s Strategy, prices []float64, o BacktestOptions) BacktestResult {
 			}
 			continue
 		}
-		if i%o.Every != 0 {
+		if i%o.Every != 0 || i < waitUntil {
 			continue
 		}
 		sig := s.Decide(prices[:i+1])

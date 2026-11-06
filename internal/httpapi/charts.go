@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/vikram/agent-arena/internal/arena"
+	"github.com/vikram/agent-arena/internal/engine"
+	"github.com/vikram/agent-arena/internal/store"
 )
 
 // tradeChart is everything the trade page draws: the price since a little
@@ -88,18 +90,19 @@ func (s *Server) backtest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Strategy      string  `json:"strategy"`
-		Token         string  `json:"token"`
-		Fast          int     `json:"fast"`
-		Slow          int     `json:"slow"`
-		Window        int     `json:"window"`
-		DipPct        float64 `json:"dipPct"`
-		Streak        int     `json:"streak"`
-		Trend         int     `json:"trend"`
-		TakeProfitPct float64 `json:"takeProfitPct"`
-		StopLossPct   float64 `json:"stopLossPct"`
-		SizePct       float64 `json:"sizePct"`
-		SizeUSD       float64 `json:"sizeUsd"`
+		Strategy      string            `json:"strategy"`
+		Token         string            `json:"token"`
+		Fast          int               `json:"fast"`
+		Slow          int               `json:"slow"`
+		Window        int               `json:"window"`
+		DipPct        float64           `json:"dipPct"`
+		Streak        int               `json:"streak"`
+		Trend         int               `json:"trend"`
+		TakeProfitPct float64           `json:"takeProfitPct"`
+		StopLossPct   float64           `json:"stopLossPct"`
+		SizePct       float64           `json:"sizePct"`
+		SizeUSD       float64           `json:"sizeUsd"`
+		Limits        store.AgentLimits `json:"limits"`
 	}
 	if err := decode(r, &in); err != nil {
 		writeErr(w, 400, err.Error())
@@ -109,9 +112,14 @@ func (s *Server) backtest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "sizeUsd: 0-1000")
 		return
 	}
+	limits, err := engine.CheckAgentLimits(s.E.Cfg, in.Limits)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
 	rep, err := s.E.Backtest(r.Context(), arena.StrategyParams{Kind: in.Strategy, Fast: in.Fast, Slow: in.Slow, Window: in.Window,
 		DipPct: in.DipPct, Streak: in.Streak, Trend: in.Trend, TPPct: in.TakeProfitPct, SLPct: in.StopLossPct, SizePct: in.SizePct},
-		strings.ToUpper(strings.TrimSpace(in.Token)), in.SizeUSD)
+		strings.ToUpper(strings.TrimSpace(in.Token)), in.SizeUSD, limits)
 	if err != nil {
 		writeErr(w, 400, err.Error())
 		return

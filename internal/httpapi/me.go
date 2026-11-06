@@ -295,21 +295,26 @@ func (s *Server) meAgent(w http.ResponseWriter, r *http.Request, addr string) {
 // unless a new one is given, and its own name does not count as taken.
 func (s *Server) agentRules(r *http.Request, id, owner string, old *store.UserAgent) (store.UserAgent, int, error) {
 	var in struct {
-		Name          string  `json:"name"`
-		Tagline       string  `json:"tagline"`
-		Strategy      string  `json:"strategy"`
-		Token         string  `json:"token"`
-		Fast          int     `json:"fast"`
-		Slow          int     `json:"slow"`
-		Window        int     `json:"window"`
-		DipPct        float64 `json:"dipPct"`
-		Streak        int     `json:"streak"`
-		Trend         int     `json:"trend"`
-		TakeProfitPct float64 `json:"takeProfitPct"`
-		StopLossPct   float64 `json:"stopLossPct"`
-		SizePct       float64 `json:"sizePct"`
+		Name          string            `json:"name"`
+		Tagline       string            `json:"tagline"`
+		Strategy      string            `json:"strategy"`
+		Token         string            `json:"token"`
+		Fast          int               `json:"fast"`
+		Slow          int               `json:"slow"`
+		Window        int               `json:"window"`
+		DipPct        float64           `json:"dipPct"`
+		Streak        int               `json:"streak"`
+		Trend         int               `json:"trend"`
+		TakeProfitPct float64           `json:"takeProfitPct"`
+		StopLossPct   float64           `json:"stopLossPct"`
+		SizePct       float64           `json:"sizePct"`
+		Limits        store.AgentLimits `json:"limits"`
 	}
 	if err := decode(r, &in); err != nil {
+		return store.UserAgent{}, 400, err
+	}
+	limits, err := engine.CheckAgentLimits(s.E.Cfg, in.Limits)
+	if err != nil {
 		return store.UserAgent{}, 400, err
 	}
 	name, tagline := strings.TrimSpace(in.Name), strings.TrimSpace(in.Tagline)
@@ -341,7 +346,7 @@ func (s *Server) agentRules(r *http.Request, id, owner string, old *store.UserAg
 	}
 	ua := store.UserAgent{ID: id, Name: name, Tagline: tagline, Owner: owner, Kind: p.Kind, Token: token, Fast: p.Fast, Slow: p.Slow,
 		Window: p.Window, DipPct: p.DipPct, Streak: p.Streak, Trend: p.Trend, TPPct: p.TPPct, SLPct: p.SLPct, SizePct: p.SizePct,
-		CreatedAt: time.Now().UTC()}
+		Limits: limits, CreatedAt: time.Now().UTC()}
 	if old != nil {
 		ua.CreatedAt, ua.Paused = old.CreatedAt, old.Paused
 	}

@@ -255,6 +255,8 @@ type BuyOpts struct {
 	MaxSlippage  string        // "" = MAX_SLIPPAGE (personal plans choose their own)
 	MaxCostPct   float64       // 0 = MAX_ENTRY_COST_PCT
 	NoNetTargets bool          // keep the take profit where it was asked
+	// ForceNetTargets raises the take profit even when NET_TARGETS is off (an agent's own setting).
+	ForceNetTargets bool
 	// Entry style (all through the same Flash /quote + /order endpoints):
 	// "" or market, limit (entryLimit), twap (DCA: TwapSeconds split into
 	// TwapBuckets slices, bracket attached), stop (stop buy at StopPrice; Flash
@@ -319,7 +321,7 @@ func (e *Executor) Buy(ctx context.Context, w *wallet.Wallet, usd, tp, sl, entry
 			}
 			return nil, err
 		}
-		if bracket && e.cfg.NetTargets && !opts.NoNetTargets && p.CostPct > 0 {
+		if bracket && (e.cfg.NetTargets || opts.ForceNetTargets) && !opts.NoNetTargets && p.CostPct > 0 {
 			bump := round2(p.MarkPrice * 2 * p.CostPct / 100)
 			if bump >= 0.01 {
 				newTP := round2(tp + bump)

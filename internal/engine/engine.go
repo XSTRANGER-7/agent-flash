@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -228,12 +229,19 @@ func (e *Engine) Propose(ctx context.Context, in referee.Intent) Result {
 		// Small wallet: a % slice would be eaten by Flash's fixed cost per
 		// order, so trade the minimum instead when the wallet holds it. The
 		// referee still applies MAX_POSITION_PCT, the cost guard still runs.
-		if m := e.Cfg.MinTradeUSD; m > 0 && in.SizeUSD < m && usdc >= m {
+		m := e.Cfg.MinTradeUSD
+		if in.MinTradeUSD > 0 {
+			m = in.MinTradeUSD // the agent maker's own minimum
+		}
+		if m > 0 && in.SizeUSD < m && usdc >= m {
 			in.SizeUSD = m
 		}
 	}
 	if in.SizeUSD > e.Cfg.MaxTradeUSD {
 		in.SizeUSD = e.Cfg.MaxTradeUSD
+	}
+	if in.MaxTradeUSD > 0 && in.SizeUSD > in.MaxTradeUSD {
+		in.SizeUSD = in.MaxTradeUSD // the agent maker's own cap (never above the arena's)
 	}
 	if d := e.budgetGate(in.SizeUSD); !d.OK {
 		return e.blocked(in, d)
@@ -276,6 +284,15 @@ func (e *Engine) Propose(ctx context.Context, in referee.Intent) Result {
 		opts.Token = &tok
 	}
 	opts.MaxSlippage = in.MaxSlippage
+	if !in.Test && in.MaxCostPct > 0 {
+		opts.MaxCostPct = in.MaxCostPct
+	}
+	switch in.NetTargets {
+	case "off":
+		opts.NoNetTargets = true
+	case "on":
+		opts.ForceNetTargets = true
+	}
 	if in.PlanID != "" {
 		opts.NoNetTargets = true // the owner chose this take profit; keep it exactly
 	}
@@ -309,6 +326,7 @@ func (e *Engine) record(ctx context.Context, in referee.Intent, w *wallet.Wallet
 		MarkPrice: p.MarkPrice, EntryCostUSD: p.CostUSD, EntryCostPct: p.CostPct, ApproveTx: p.ApproveTx, Protection: "pending",
 		Paper: p.Paper, Test: in.Test, Kind: tradeKind(in, w), PlanID: in.PlanID, TokenAddr: tok.Address, TokenDec: tok.Decimals,
 		Style: in.Style, StopPrice: in.StopPrice, TwapMinutes: in.TwapMinutes, ProtectMode: in.ProtectMode, TrailPct: in.TrailPct,
+		BreakEven: in.BreakEven,
 	}
 	if p.OriginalTP != p.TakeProfit {
 		t.OriginalTP = p.OriginalTP
@@ -435,7 +453,7 @@ func (e *Engine) copyOne(ctx context.Context, in referee.Intent, src *store.Trad
 	if usd <= 0 {
 		if src == nil && usdc <= 0 {
 			// Unfunded investor wallet: let the referee say so (posted once an hour).
-			ci := in
+			ci := followerIntent(in)
 			ci.WalletID, ci.SizeUSD, ci.SizePct = f.FollowerID, 0, alloc
 			e.Propose(ctx, ci)
 		}
@@ -474,7 +492,7 @@ func (e *Engine) copyOne(ctx context.Context, in referee.Intent, src *store.Trad
 			return
 		}
 	}
-	ci := in
+	ci := followerIntent(in)
 	ci.WalletID, ci.SizeUSD, ci.SizePct = f.FollowerID, usd, alloc
 	if src != nil {
 		ci.CopyOf = src.ID
@@ -529,6 +547,36 @@ func (e *Engine) RunAgents(ctx context.Context) {
 
 // runAgent is one agent's loop: check the strategy every AGENT_EVERY and
 // trade its signals (its own wallet, then the people who invest with it).
+// followerIntent is the agent's trade for a follower: same coin, targets,
+// cost limit and slippage, but the follower's own size and daily limits.
+func followerIntent(in referee.Intent) referee.Intent {
+	in.MinTradeUSD, in.MaxTradeUSD, in.MaxTradesPerDay = 0, 0, 0
+	return in
+}
+
+// applyLimits puts a community agent's Advanced settings on its intent.
+func applyLimits(in *referee.Intent, l store.AgentLimits) {
+	in.MaxCostPct, in.MinTradeUSD, in.MaxTradeUSD, in.MaxTradesPerDay = l.MaxCostPct, l.MinTradeUSD, l.MaxTradeUSD, l.TradesPerDay
+	in.NetTargets, in.BreakEven = l.NetTargets, l.BreakEven
+	if l.SlippagePct > 0 {
+		in.MaxSlippage = strconv.FormatFloat(l.SlippagePct/100, 'f', 4, 64)
+	}
+}
+
+// coolingDown reports whether a community agent is waiting after a loss.
+func (e *Engine) coolingDown(id string, minutes int) bool {
+	if minutes <= 0 {
+		return false
+	}
+	for _, t := range e.Store.Trades(id, 20) {
+		if t.WalletID == id && t.Kind == "agent" && t.Status == "closed" && t.PnLUSD != nil && *t.PnLUSD < 0 &&
+			time.Since(t.UpdatedAt) < time.Duration(minutes)*time.Minute {
+			return true
+		}
+	}
+	return false
+}
+
 // agentPrices is the price history of the coin an agent trades (WETH from
 // the pool, other coins from their Flash quote feed).
 func (e *Engine) agentPrices(prof arena.Profile) (string, []float64, bool) {
@@ -566,8 +614,9 @@ func (e *Engine) runAgent(ctx context.Context, id string) {
 		if !ok {
 			return
 		}
-		if ua, isUser := e.Store.UserAgent(id); isUser && ua.Paused {
-			continue // its maker paused it
+		ua, isUser := e.Store.UserAgent(id)
+		if isUser && (ua.Paused || e.coolingDown(id, ua.Limits.CooldownMin)) {
+			continue // its maker paused it, or it waits after a loss
 		}
 		sym, prices, fresh := e.agentPrices(prof)
 		if !fresh || len(prices) == 0 {
@@ -582,6 +631,9 @@ func (e *Engine) runAgent(ctx context.Context, id string) {
 			AgentID: id, WalletID: id, OrderType: "market+bracket", Token: sym,
 			SizePct: sig.SizePct, Price: px, TakeProfit: round2(px * (1 + sig.TPPct/100)), StopLoss: round2(px * (1 - sig.SLPct/100)),
 			Reason: sig.Reason,
+		}
+		if isUser {
+			applyLimits(&in, ua.Limits)
 		}
 		if e.Cfg.Live() && !e.Cfg.LiveAgents {
 			// Real money only moves when a person asks (test trade) until

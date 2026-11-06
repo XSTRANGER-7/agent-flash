@@ -122,3 +122,30 @@ func TestPausedUserAgentDoesNotTrade(t *testing.T) {
 		}
 	}
 }
+
+// An agent maker's Advanced settings tighten its trades (size, trades a day)
+// and values past the hard caps are refused.
+func TestAgentLimitsApplyAndAreCapped(t *testing.T) {
+	e, _ := setup(t)
+	if _, err := CheckAgentLimits(e.Cfg, store.AgentLimits{MaxTradeUSD: e.Cfg.MaxTradeUSD + 1}); err == nil {
+		t.Fatal("a largest trade above the arena's was accepted")
+	}
+	if _, err := CheckAgentLimits(e.Cfg, store.AgentLimits{MaxCostPct: 9}); err == nil {
+		t.Fatal("a 9% cost limit was accepted")
+	}
+	l, err := CheckAgentLimits(e.Cfg, store.AgentLimits{MaxTradeUSD: 2, TradesPerDay: 1, BreakEven: "off"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := referee.Intent{AgentID: "follower1", WalletID: "follower1", Kind: "agent", OrderType: "market+bracket", Token: "WETH",
+		SizePct: 25, Price: 3000, TakeProfit: 3045, StopLoss: 2970, Reason: "test"}
+	applyLimits(&in, l)
+	res := e.Propose(context.Background(), in)
+	if res.Trade == nil || res.Trade.SizeUSD != 2 || res.Trade.BreakEven != "off" {
+		t.Fatalf("first trade: %+v %+v", res.Decision, res.Trade)
+	}
+	e.Referee.Closed(in.WalletID) // close the position so only the daily limit can stop the next one
+	if res := e.Propose(context.Background(), in); res.Decision.Code != "DAILY_LIMIT" {
+		t.Fatalf("want DAILY_LIMIT after its own 1 trade a day, got %+v", res.Decision)
+	}
+}
