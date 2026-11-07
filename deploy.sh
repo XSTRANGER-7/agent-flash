@@ -152,12 +152,15 @@ REMOTE_SWAP='
   OLD_REF=$($RD inspect -f "{{.Config.Image}}" "$APP" 2>/dev/null || true)
 
   run_new() {  # $1 = image ref
-    # .env is mounted (the app parses quotes/comments itself); these four must win over what is in it
+    # .env is mounted (the app parses quotes/comments itself); these four must win over what is in it.
+    # wallets.json is mounted read-write: every new account, sub-wallet and plan adds a key to it
+    # (written in place, so the file keeps owner 65532 and mode 600). A read-only mount makes
+    # "Create my account" fail.
     $RD run -d --name "$APP" --restart unless-stopped \
       -p "${BIND}:${PORT}:8080" \
       -e HTTP_ADDR=:8080 -e DATA_DIR=/app/data -e WALLETS_FILE=/app/secrets/wallets.json $MODE_ARG \
       -v "$DIR/.env:/app/.env:ro" \
-      -v "$DIR/wallets.json:/app/secrets/wallets.json:ro" \
+      -v "$DIR/wallets.json:/app/secrets/wallets.json" \
       -v "$VOL:/app/data" \
       --log-driver json-file --log-opt max-size=20m --log-opt max-file=5 \
       "$1" >/dev/null

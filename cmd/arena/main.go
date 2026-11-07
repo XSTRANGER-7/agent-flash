@@ -366,6 +366,13 @@ func withEngine(log *slog.Logger, fn func(context.Context, *engine.Engine) error
 	if err != nil {
 		return err
 	}
+	// New accounts, sub-wallets and plans add keys to the wallets file. Say so
+	// at start when it cannot be written (e.g. a read-only container mount).
+	if f, err := os.OpenFile(cfg.WalletsFile, os.O_WRONLY, 0); err != nil {
+		log.Warn("wallets file is not writable: new accounts, sub-wallets and plans cannot be created", "file", cfg.WalletsFile, "err", err)
+	} else {
+		f.Close()
+	}
 	if cfg.Paper {
 		// Paper results never mix with real ones.
 		cfg.DataDir = filepath.Join(cfg.DataDir, "paper")

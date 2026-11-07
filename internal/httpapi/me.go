@@ -642,7 +642,12 @@ func (s *Server) meAccount(w http.ResponseWriter, r *http.Request, addr string) 
 	}
 	nw, err := s.E.Wallets.Create(s.accountID(addr))
 	if err != nil {
-		writeErr(w, 409, err.Error())
+		s.Log.Error("account wallet not created", "address", addr, "err", err)
+		if strings.Contains(err.Error(), "already exists") {
+			writeErr(w, 409, "an account with this id already exists; sign in again or contact the operator")
+			return
+		}
+		writeErr(w, 503, "the server could not save your new account wallet right now; please tell the operator (the wallets file must be writable)")
 		return
 	}
 	short := addr[:6] + "…" + addr[len(addr)-4:]

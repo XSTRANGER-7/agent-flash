@@ -1,6 +1,7 @@
 # Static, dependency-free Go binary on a distroless base.
 # Secrets are NOT baked in: pass the env vars (FLASH_API_KEY, ADMIN_TOKEN, ...)
-# at run time and mount wallets.json read-only. See README "Deploy".
+# at run time and mount wallets.json writable by uid 65532 (new accounts and
+# sub-wallets add keys to it), mode 600. See README "Deploy".
 FROM golang:1.24 AS build
 WORKDIR /src
 COPY go.mod ./

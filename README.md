@@ -416,14 +416,15 @@ docker build -t agent-arena .
 docker run -d --name arena -p 8080:8080 \
   --env-file .env \
   -e HTTP_ADDR=:8080 -e PUBLIC_URL=https://your-domain \
-  -v /srv/arena/wallets.json:/app/secrets/wallets.json:ro \
+  -v /srv/arena/wallets.json:/app/secrets/wallets.json \
   -v arena-data:/app/data \
   agent-arena
 ```
 
-- **`wallets.json`:** create it once with `arena keygen` on a trusted machine, back it
-  up, and mount it read-only. If the platform cannot mount files, store it as a secret
-  file at `/app/secrets/wallets.json`.
+- **`wallets.json`:** create it once with `arena keygen` on a trusted machine and back it
+  up. Mount it **writable** (owner uid 65532, mode 600): every new account, sub-wallet and
+  plan adds a key to it, so a read-only mount makes "Create my account" fail. Back it up
+  after new accounts are made; it holds private keys.
 - **`arena-data`:** a persistent volume. Trades, plans, equity and the paper ledger live
   there; without a volume they reset on every deploy.
 - **Mode:** the image defaults to `MODE=paper`. Set `MODE=live` only after a funded $1 test.
