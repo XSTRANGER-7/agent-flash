@@ -336,12 +336,45 @@ func (s *Server) trade(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"trade": t, "predictions": map[string]int{"win": win, "lose": lose}})
 }
 
+// feedList pages through the saved feed, newest first: before = the id of
+// the last post you have, filter = all | trades | copies | blocked |
+// approvals, q = words in the text, agent = an agent id.
 func (s *Server) feedList(w http.ResponseWriter, r *http.Request) {
-	n, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	q := r.URL.Query()
+	n, _ := strconv.Atoi(q.Get("limit"))
 	if n <= 0 || n > 200 {
 		n = 50
 	}
-	writeJSON(w, 200, map[string]any{"posts": s.E.Feed.Latest(n)})
+	filter, agent := q.Get("filter"), q.Get("agent")
+	text := strings.ToLower(strings.TrimSpace(q.Get("q")))
+	if len(text) > 80 {
+		text = text[:80]
+	}
+	keep := func(p feed.Post) bool {
+		return feedKindMatch(filter, p.Kind) && (agent == "" || p.AgentID == agent) &&
+			(text == "" || strings.Contains(strings.ToLower(p.Text), text))
+	}
+	posts, more, total := s.E.Feed.Page(q.Get("before"), n, keep)
+	out := map[string]any{"posts": posts, "more": more, "total": total}
+	if t := s.E.Feed.Oldest(); !t.IsZero() {
+		out["since"] = t
+	}
+	writeJSON(w, 200, out)
+}
+
+// feedKindMatch mirrors the feed page's filter chips.
+func feedKindMatch(filter, kind string) bool {
+	switch filter {
+	case "trades":
+		return kind == "trade_placed" || kind == "trade_filled" || kind == "trade_closed"
+	case "copies":
+		return kind == "copy_placed" || kind == "follow"
+	case "blocked":
+		return strings.HasSuffix(kind, "blocked")
+	case "approvals":
+		return kind == "approval"
+	}
+	return true
 }
 
 // feedStream is Server-Sent Events: live feed for the frontend.

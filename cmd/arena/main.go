@@ -386,7 +386,13 @@ func withEngine(log *slog.Logger, fn func(context.Context, *engine.Engine) error
 	defer ob.Close()
 	fc := flash.New(cfg.FlashBaseURL, cfg.FlashAPIKey, log)
 	rpc := evm.NewRPC(cfg.RPCURL)
-	fd := feed.New(500)
+	// The feed is saved: every post goes to DATA_DIR/feed.jsonl and the
+	// newest 20,000 come back after a restart (the full history page).
+	fd, err := feed.Open(filepath.Join(cfg.DataDir, "feed.jsonl"), 20000)
+	if err != nil {
+		return fmt.Errorf("feed history: %w", err)
+	}
+	defer fd.Close()
 	roster := arena.DefaultRoster()
 	allowed := map[string]bool{cfg.TradeAsset: true}
 	for _, t := range cfg.Tokens {

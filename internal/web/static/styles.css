@@ -1685,6 +1685,18 @@ a.chip::after { content: ""; position: absolute; inset: -8px -4px; }
   .home .why h3 { font-size: 18px; }
 }
 
+/* ---------- feed: live and all history ---------- */
+.feed-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); margin: 0 0 var(--s3); }
+.feed-view span { padding-inline: 18px; }
+.feed-search { flex: 1 1 260px; max-width: 420px; }
+.feed-search[hidden] { display: none; }
+.feed-search input { width: 100%; height: 44px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--hair-2); background: var(--pine); color: var(--mist); font: 500 15px var(--font); }
+.feed-search input:focus { outline: 2px solid var(--signal); outline-offset: 1px; }
+.feed-count { margin: 0 0 var(--s3); }
+.feed-more { display: grid; justify-items: center; gap: 8px; margin: var(--s5) 0; }
+.feed-sentinel { display: block; width: 1px; height: 1px; }
+.feed-end { margin: var(--s5) 0; text-align: center; }
+
 /* ---------- phones: top agents as a stacked list of small cards ---------- */
 @media (max-width: 760px) {
   .standings-head + div { display: grid; gap: 8px; }

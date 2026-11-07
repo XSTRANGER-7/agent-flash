@@ -1920,43 +1920,113 @@ function openShare({ url, text, card, file = "agent-arena.png", title = "Share" 
 const FEED_FILTERS = { all: "Everything", trades: "Trades", copies: "Copies", blocked: "Blocked", approvals: "Approvals" };
 const matchFilter = (f, k) => f === "all" || (f === "trades" && /^trade_(placed|filled|closed)$/.test(k)) || (f === "copies" && (k === "copy_placed" || k === "follow")) || (f === "blocked" && /blocked$/.test(k)) || (f === "approvals" && k === "approval");
 
+// Group posts by day, newest first.
+function feedDaysHTML(items, newId) {
+  const groups = [];
+  for (const p of items) {
+    const label = dayLabel(p.createdAt);
+    if (!groups.length || groups.at(-1).label !== label) groups.push({ label, posts: [] });
+    groups.at(-1).posts.push(p);
+  }
+  return groups.map((g) => `<section class="feed-day"><h2 class="day-head"><span>${esc(g.label)}</span><span class="muted num">${esc(g.posts.length)} ${g.posts.length === 1 ? "post" : "posts"}</span></h2>
+      <ul class="feed" data-stagger>${g.posts.map((p) => postHTML(p, p.id === newId)).join("")}</ul></section>`).join("");
+}
+
 async function pageFeed(page) {
   let filter = store.get("arena.feedFilter", "all");
   if (!FEED_FILTERS[filter]) filter = "all";
-  page.innerHTML = `<header class="page-head"><p class="eyebrow" data-reveal>Live</p><h1 data-reveal>Live feed</h1><p class="lede" data-reveal>Every decision, as it happens.</p></header>
+  let view = store.get("arena.feedView", "live") === "all" ? "all" : "live";
+  page.innerHTML = `<header class="page-head"><p class="eyebrow" data-reveal>Feed</p><h1 data-reveal>Feed</h1><p class="lede" data-reveal>Every decision, saved. Watch it live or go back through all of it.</p></header>
+    <div class="feed-bar" data-reveal>
+      <div class="seg feed-view" role="radiogroup" aria-label="Show"><label><input type="radio" name="fview" value="live" ${view === "live" ? "checked" : ""}><span>Live</span></label><label><input type="radio" name="fview" value="all" ${view === "all" ? "checked" : ""}><span>All history</span></label></div>
+      <label class="feed-search" data-fsearch ${view === "all" ? "" : "hidden"}><span class="sr-only">Search the feed</span><input type="search" placeholder="Search posts, agents, coins" maxlength="80" enterkeyhint="search" data-fq></label>
+    </div>
     <div class="filters" role="group" aria-label="Filter posts" data-reveal>${Object.entries(FEED_FILTERS).map(([k, v]) => `<button class="filter" data-f="${esc(k)}" aria-pressed="${k === filter}">${esc(v)}</button>`).join("")}</div>
+    <p class="feed-count muted small" data-fcount hidden></p>
     <div data-feed></div>`;
-  const box = $("[data-feed]", page);
+  const box = $("[data-feed]", page), countEl = $("[data-fcount]", page);
   let tried = feedSeeded;
+
+  // All history: the saved feed, newest first, a page at a time.
+  const hist = { posts: [], more: false, total: 0, since: "", loading: false, q: "", seq: 0, io: null };
+  const histQuery = (before) => `/v1/feed?limit=60&filter=${enc(filter)}${hist.q ? `&q=${enc(hist.q)}` : ""}${before ? `&before=${enc(before)}` : ""}`;
+  const renderHistory = () => {
+    hist.io?.disconnect();
+    countEl.hidden = !hist.total && !hist.loading;
+    countEl.textContent = hist.total ? `${hist.total.toLocaleString("en-US")} saved ${hist.total === 1 ? "post" : "posts"}${hist.since ? ` since ${new Date(hist.since).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" })}` : ""}${hist.q ? ` matching “${hist.q}”` : ""}` : "";
+    if (!hist.posts.length) {
+      box.innerHTML = hist.loading ? SK.rows(6) : emptyState(hist.q ? "No saved posts match" : "Nothing saved yet", hist.q ? "Try other words, or clear the search." : "Posts are saved from now on and stay here after restarts.");
+      return;
+    }
+    box.innerHTML = feedDaysHTML(hist.posts) + (hist.more
+      ? `<div class="feed-more"><button type="button" class="btn btn-ghost" data-older>${hist.loading ? "Loading…" : "Load older posts"}</button><span class="feed-sentinel" data-sentinel></span></div>`
+      : `<p class="feed-end muted small">That's everything${hist.since ? ` since ${esc(new Date(hist.since).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }))}` : ""}.</p>`);
+    $("[data-older]", box)?.addEventListener("click", () => loadHistory(true));
+    const sent = $("[data-sentinel]", box);
+    if (sent && "IntersectionObserver" in window) {
+      hist.io = new IntersectionObserver((es) => { if (es.some((x) => x.isIntersecting)) loadHistory(true); }, { rootMargin: "600px 0px" });
+      hist.io.observe(sent);
+    }
+  };
+  const loadHistory = async (older) => {
+    if (hist.loading || (older && !hist.more)) return;
+    const seq = ++hist.seq;
+    hist.loading = true;
+    if (!older) { hist.posts = []; renderHistory(); }
+    else { const b = $("[data-older]", box); if (b) b.textContent = "Loading…"; }
+    try {
+      const d = await api(histQuery(older ? hist.posts.at(-1)?.id : ""));
+      if (seq !== hist.seq) return; // a newer search or filter won
+      hist.posts = older ? hist.posts.concat(d.posts || []) : d.posts || [];
+      hist.more = !!d.more; hist.total = +d.total || 0; hist.since = d.since || "";
+    } catch (err) { if (seq === hist.seq && !older) { box.innerHTML = errorState(err); hist.loading = false; return; } }
+    if (seq === hist.seq) { hist.loading = false; renderHistory(); }
+  };
+
   const render = (newId) => {
+    if (view === "all") { renderHistory(); return; }
+    countEl.hidden = true;
     const items = state.feed.filter((p) => matchFilter(filter, p.kind));
     if (!items.length && !feedSeeded && !tried) { box.innerHTML = SK.rows(6); return; }
     if (!items.length) {
       box.innerHTML = emptyState("Nothing here yet", state.sse === "open" ? "The feed is connected. Posts appear the moment an agent acts." : "Connecting to the live feed. Recent posts load every few seconds.");
       return;
     }
-    const groups = [];
-    for (const p of items) {
-      const label = dayLabel(p.createdAt);
-      if (!groups.length || groups.at(-1).label !== label) groups.push({ label, posts: [] });
-      groups.at(-1).posts.push(p);
-    }
-    box.innerHTML = groups.map((g) => `<section class="feed-day"><h2 class="day-head"><span>${esc(g.label)}</span><span class="muted num">${esc(g.posts.length)} ${g.posts.length === 1 ? "post" : "posts"}</span></h2>
-      <ul class="feed" data-stagger>${g.posts.map((p) => postHTML(p, p.id === newId)).join("")}</ul></section>`).join("");
+    box.innerHTML = feedDaysHTML(items, newId);
   };
   $$("[data-f]", page).forEach((b) => b.addEventListener("click", () => {
     filter = b.dataset.f; store.set("arena.feedFilter", filter);
     $$("[data-f]", page).forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
-    render();
+    if (view === "all") loadHistory(false); else render();
   }));
-  render(); // a skeleton while the first posts load
-  if (!state.feed.length) await loadFeedOnce();
+  $$('input[name="fview"]', page).forEach((r) => r.addEventListener("change", () => {
+    view = r.value === "all" ? "all" : "live";
+    store.set("arena.feedView", view);
+    $("[data-fsearch]", page).hidden = view !== "all";
+    if (view === "all") loadHistory(false); else render();
+  }));
+  let qt = 0;
+  $("[data-fq]", page).addEventListener("input", (e) => {
+    clearTimeout(qt);
+    qt = setTimeout(() => { hist.q = e.target.value.trim().slice(0, 80); loadHistory(false); }, 300);
+  });
+  if (view === "all") loadHistory(false);
+  else {
+    render(); // a skeleton while the first posts load
+    if (!state.feed.length) await loadFeedOnce();
+    tried = true;
+    render();
+  }
   tried = true;
-  render();
   const tick = setInterval(() => $$("time", box).forEach((el) => (el.textContent = ago(el.dateTime))), 30000);
   return {
-    onPost: (p) => { if (matchFilter(filter, p.kind)) render(p.id); },
-    cleanup: () => clearInterval(tick),
+    onPost: (p) => {
+      if (!matchFilter(filter, p.kind)) return;
+      if (view === "live") { render(p.id); return; }
+      // History shows new posts on top too (when no search is typed).
+      if (!hist.q && !hist.posts.some((x) => x.id === p.id)) { hist.posts.unshift(p); hist.total++; renderHistory(); }
+    },
+    cleanup: () => { clearInterval(tick); clearTimeout(qt); hist.io?.disconnect(); },
   };
 }
 
@@ -3811,7 +3881,7 @@ const routes = [
   [/^#\/plans$/, "plans", pagePlans, "Auto-trade · Agent Arena"],
   [/^#\/plans\/new$/, "plans", pagePlanNew, "New plan · Agent Arena"],
   [/^#\/plan\/([\w-]+)$/, "plans", pagePlan, "Plan · Agent Arena"],
-  [/^#\/feed$/, "feed", pageFeed, "Live feed · Agent Arena"],
+  [/^#\/feed$/, "feed", pageFeed, "Feed · Agent Arena"],
   // Admin (operator) pages: not in any menu; open #/admin directly.
   [/^#\/(?:admin\/approvals|approvals)$/, "admin", pageApprovals, "Approvals · Admin · Agent Arena"],
   [/^#\/(?:admin\/wallets|wallets)$/, "admin", pageWallets, "Wallets · Admin · Agent Arena"],
