@@ -270,9 +270,9 @@ if [ $HAVE_ENV = 0 ] || [ $PUSH_ENV = 1 ]; then
   rscp .env "$TARGET:$REMOTE_DIR/.env.new" && rssh "chmod 644 '$REMOTE_DIR/.env.new' && mv '$REMOTE_DIR/.env.new' '$REMOTE_DIR/.env'"
 fi
 if [ $HAVE_WAL = 0 ]; then
-  rscp wallets.json "$TARGET:$REMOTE_DIR/wallets.json.new" && rssh "chmod 644 '$REMOTE_DIR/wallets.json.new' && mv -n '$REMOTE_DIR/wallets.json.new' '$REMOTE_DIR/wallets.json'"
-  # .env and wallets.json are 644 on purpose: the container runs as non-root uid 65532 and reads them through a
-  # read-only bind mount. REMOTE_DIR is 700, so other users on the server cannot reach them.
+  rscp wallets.json "$TARGET:$REMOTE_DIR/wallets.json.new" && rssh "sudo -n chown 65532:65532 '$REMOTE_DIR/wallets.json.new' && chmod 600 '$REMOTE_DIR/wallets.json.new' && mv -n '$REMOTE_DIR/wallets.json.new' '$REMOTE_DIR/wallets.json'"
+  # The container runs as non-root uid 65532 and the app refuses a wallets.json that is not chmod 600, so that file is
+  # owned by 65532 with mode 600. .env is 644 so the same uid can read it. REMOTE_DIR is 700: other users cannot reach either.
 fi
 
 say "Streaming the image to the server (docker save | gzip | ssh | docker load)"
