@@ -1549,7 +1549,8 @@ a.chip { position: relative; }
 a.chip::after { content: ""; position: absolute; inset: -8px -4px; }
 .agent-link, .sig-agent, a.addr, .docs-toc a { display: inline-block; padding-block: 11px; margin-block: -11px; }
 .docs-toc a { min-height: 44px; display: inline-flex; align-items: center; margin-block: 0; padding-block: 0; }
-@media (pointer: coarse) { main a[href^="#/agent/"] { padding-block: 11px; margin-block: -11px; display: inline-block; } }
+/* bigger tap area for small text links to agents on touch screens (never rows, cards or buttons) */
+@media (pointer: coarse) { main a.link[href^="#/agent/"], main a.link-quiet[href^="#/agent/"] { padding-block: 11px; margin-block: -11px; display: inline-block; } }
 
 /* ---------- launch screen ---------- */
 .splash { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; background: #030303; transition: opacity .42s var(--ease), visibility .42s; animation: splashAuto .4s 4s forwards; }
