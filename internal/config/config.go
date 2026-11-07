@@ -43,6 +43,9 @@ type Config struct {
 	// Tokens that can be traded (agents trade TradeAsset = WETH; personal plans
 	// may pick any of these). Symbol, address and decimals, verified onchain at startup.
 	Tokens []Token
+	// Chains Flash executes on (prices + gas for every one; own wallets may
+	// trade ETH on the ones with an ETH market). The home chain is Base.
+	Chains []Chain
 
 	// Mode: "paper" (mock balances, real Flash quotes + signing, simulated fills),
 	// "dry" (quote + sign, never submit) or "live" (real orders). DryRun mirrors
@@ -99,6 +102,7 @@ type Config struct {
 
 	// Loops
 	PriceEvery  time.Duration
+	ChainsEvery time.Duration // refresh of every chain's ticker data (Flash quote + RPC)
 	AgentEvery  time.Duration
 	EquityEvery time.Duration
 	OrderPoll   time.Duration
@@ -175,6 +179,7 @@ func Load() (*Config, error) {
 		DailyLossLimitUSD:    num("DAILY_LOSS_LIMIT_USD", 0),
 		MaxHoldHours:         num("MAX_HOLD_HOURS", 0),
 		PriceEvery:           dur("PRICE_EVERY", 15*time.Second),
+		ChainsEvery:          dur("CHAINS_EVERY", 90*time.Second),
 		AgentEvery:           dur("AGENT_EVERY", 30*time.Second),
 		EquityEvery:          dur("EQUITY_EVERY", 60*time.Second),
 		OrderPoll:            dur("ORDER_POLL", 5*time.Second),
@@ -192,6 +197,7 @@ func Load() (*Config, error) {
 		SeasonID:             env("SEASON_ID", "s1"),
 	}
 	c.Tokens = []Token{{Symbol: c.TradeAsset, Address: c.WETH, Decimals: 18}}
+	c.buildChains()
 	var errs []string
 	specs := list("EXTRA_TOKENS")
 	if _, set := os.LookupEnv("EXTRA_TOKENS"); !set {

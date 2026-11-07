@@ -296,7 +296,7 @@ func (e *Engine) followExit(ctx context.Context, w *wallet.Wallet, tr store.Trad
 func (e *Engine) closeFromExit(ctx context.Context, w *wallet.Wallet, tr store.Trade, o *flash.Order, operator bool) {
 	recv, exitPx := o.FilledContra(), o.AvgNotionalPrice()
 	e.invalidate(w.ID)
-	usdcNow, _, balErr := e.Balances(ctx, w, 0)
+	usdcNow, _, balErr := e.tradeBalances(ctx, w, tr, 0)
 	var pnl *float64
 	if recv > 0 && tr.USDCSpent > 0 {
 		v := round2(recv - tr.USDCSpent)
@@ -355,11 +355,10 @@ func (e *Engine) closeFromExit(ctx context.Context, w *wallet.Wallet, tr store.T
 // balanceFallback is the pre-bracket-id logic: close only after the WETH was
 // seen in the wallet and is gone again (or long after the fill).
 func (e *Engine) balanceFallback(ctx context.Context, w *wallet.Wallet, tr store.Trade, held map[string]bool) {
-	usdc, _, err := e.Balances(ctx, w, e.Cfg.OrderPoll/2)
+	usdc, weth, err := e.tradeBalances(ctx, w, tr, e.Cfg.OrderPoll/2)
 	if err != nil {
 		return
 	}
-	weth, _ := e.TokenBalance(ctx, w, tr.TokenAddr, e.Cfg.OrderPoll/2)
 	if weth >= 1e-7 {
 		held[tr.ID] = true
 		return
@@ -454,6 +453,10 @@ func (e *Engine) ExitPosition(ctx context.Context, id string) (*store.Trade, err
 	w, ok := e.Wallets.Get(tr.WalletID)
 	if !ok {
 		return nil, errors.New("wallet missing")
+	}
+	if w.Role == wallet.RoleSelf || tr.Kind == "self" {
+		// The person's own wallet (any chain): only they can sign a sale.
+		return nil, fmt.Errorf("%w: this position is in the person's own wallet; only they can sell it", ErrNotExitable)
 	}
 	if tr.TPOrderID != "" && tr.Protection != "none" {
 		e.cancelQuietly(ctx, w, tr.TPOrderID) // separate mode: drop the take-profit first

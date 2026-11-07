@@ -372,7 +372,7 @@ func (e *Engine) record(ctx context.Context, in referee.Intent, w *wallet.Wallet
 		MarkPrice: p.MarkPrice, EntryCostUSD: p.CostUSD, EntryCostPct: p.CostPct, ApproveTx: p.ApproveTx, Protection: "pending",
 		Paper: p.Paper, Test: in.Test, Kind: tradeKind(in, w), PlanID: in.PlanID, TokenAddr: tok.Address, TokenDec: tok.Decimals,
 		Style: in.Style, StopPrice: in.StopPrice, TwapMinutes: in.TwapMinutes, ProtectMode: in.ProtectMode, TrailPct: in.TrailPct,
-		BreakEven: in.BreakEven, MaxHoldMin: in.MaxHoldMin,
+		BreakEven: in.BreakEven, MaxHoldMin: in.MaxHoldMin, Chain: in.Chain, ChainToken: in.ChainToken,
 	}
 	if p.OriginalTP != p.TakeProfit {
 		t.OriginalTP = p.OriginalTP
@@ -406,6 +406,9 @@ func (e *Engine) record(ctx context.Context, in referee.Intent, w *wallet.Wallet
 			kind, text = "copy_placed", fmt.Sprintf("%s copied %s from their own wallet: $%.2f, TP %s, SL %s", who, e.name(in.AgentID), in.SizeUSD, fmtPx(t.TakeProfit), fmtPx(t.StopLoss))
 		} else {
 			text = fmt.Sprintf("%s traded from their own wallet: LONG %s $%.2f, TP %s, SL %s", who, in.Token, in.SizeUSD, fmtPx(t.TakeProfit), fmtPx(t.StopLoss))
+		}
+		if in.Chain != "" && in.Chain != e.Cfg.Chain {
+			text += " · on " + e.tradeChain(in.Chain).Name
 		}
 	}
 	if t.Paper {

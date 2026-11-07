@@ -48,6 +48,10 @@ type Trade struct {
 	PlanID      string `json:"planId,omitempty"`
 	TokenAddr   string `json:"tokenAddress,omitempty"` // empty = WETH (older trades)
 	TokenDec    int    `json:"tokenDecimals,omitempty"`
+	// Own-wallet trades on another chain: Flash chain name and the token's
+	// address there ("" = Base). TokenAddr stays the Base price reference.
+	Chain      string `json:"chain,omitempty"`
+	ChainToken string `json:"chainToken,omitempty"`
 	// Advanced Flash order styles: market | limit | twap (DCA) | stop (stop buy).
 	Style       string   `json:"style,omitempty"`
 	StopPrice   float64  `json:"stopPrice,omitempty"`   // stop buy trigger

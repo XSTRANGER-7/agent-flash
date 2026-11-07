@@ -188,7 +188,7 @@ func checkQuoteShape(q *flash.QuoteResponse, wantBracket bool) error {
 	case q.NeedsWrap():
 		return errors.New("quote asks for a native-asset wrap; not expected for USDC/WETH, refusing")
 	case q.BridgeQuoteID != nil && *q.BridgeQuoteID != "":
-		return errors.New("quote is crosschain (bridgeQuoteId set); only same-chain Base orders are allowed")
+		return errors.New("quote is crosschain (bridgeQuoteId set); only same-chain orders are allowed")
 	}
 	if wantBracket {
 		ab := q.AttachedBracket
@@ -268,6 +268,9 @@ type BuyOpts struct {
 	// External: the order is signed in the person's own wallet. Buy runs
 	// every guard, then returns the payloads instead of signing.
 	External bool
+	// Chain: another chain Flash executes on (nil = the home chain, Base).
+	// Only for External orders; Token must then be that chain's ETH token.
+	Chain *config.Chain
 }
 
 func (e *Executor) BuyWithBracket(ctx context.Context, w *wallet.Wallet, usd, tp, sl, entryLimit, refPrice float64) (*Placement, error) {
@@ -285,6 +288,17 @@ func (e *Executor) Buy(ctx context.Context, w *wallet.Wallet, usd, tp, sl, entry
 
 	tok := e.token(opts.Token)
 	req := e.buyRequestFor(w, tok, usd, tp, sl, entryLimit)
+	ch := e.cfg.Home()
+	if opts.Chain != nil && opts.Chain.Key != ch.Key {
+		if !opts.External {
+			return nil, fmt.Errorf("orders on %s are placed from your own wallet only", opts.Chain.Name)
+		}
+		if opts.Token == nil || !strings.EqualFold(opts.Token.Address, opts.Chain.ETH.Address) {
+			return nil, fmt.Errorf("on %s the arena only trades ETH", opts.Chain.Name)
+		}
+		ch = *opts.Chain
+		req.TargetChain, req.ContraChain, req.ContraAsset = ch.Key, ch.Key, ch.USDC.Address
+	}
 	if opts.MaxSlippage != "" && entryLimit == 0 {
 		req.MaxSlippage = opts.MaxSlippage
 	}
@@ -352,11 +366,11 @@ func (e *Executor) Buy(ctx context.Context, w *wallet.Wallet, usd, tp, sl, entry
 	}
 
 	// Guards: never blind-sign. Everything is checked before any onchain tx.
-	qtyUnits, err := decToUnits(req.Qty, 6)
+	qtyUnits, err := decToUnits(req.Qty, ch.USDC.Decimals)
 	if err != nil {
 		return nil, err
 	}
-	if err := e.guardTypedData(q.EVM.OrderTypedData, w.Address(), expect{from: e.cfg.USDC, to: tok.Address, exact: qtyUnits}); err != nil {
+	if err := e.guardTypedData(q.EVM.OrderTypedData, w.Address(), expect{from: ch.USDC.Address, to: tok.Address, exact: qtyUnits, chainID: ch.ID}); err != nil {
 		return nil, fmt.Errorf("entry payload: %w", err)
 	}
 	if q.To == nil || q.To.Amount.Float() <= 0 {
@@ -377,17 +391,17 @@ func (e *Executor) Buy(ctx context.Context, w *wallet.Wallet, usd, tp, sl, entry
 		if got := q.To.Amount.Float(); q.AttachedBracket.SignedMaxFromAmount.Float() > got*ratio {
 			return nil, fmt.Errorf("bracket may sell %s %s but the entry only buys %.10f; refusing", q.AttachedBracket.SignedMaxFromAmount, tok.Symbol, got)
 		}
-		if err := e.guardTypedData(q.AttachedBracket.EVM.OrderTypedData, w.Address(), expect{from: tok.Address, to: e.cfg.USDC, max: signedMax}); err != nil {
+		if err := e.guardTypedData(q.AttachedBracket.EVM.OrderTypedData, w.Address(), expect{from: tok.Address, to: ch.USDC.Address, max: signedMax, chainID: ch.ID}); err != nil {
 			return nil, fmt.Errorf("bracket payload: %w", err)
 		}
 	}
-	if err := e.checkSetupTxs(q.SetupTxs, w.Address()); err != nil {
+	if err := e.checkSetupTxsOn(q.SetupTxs, w.Address(), ch); err != nil {
 		return nil, err
 	}
 
 	if opts.External {
 		// Self-custody: hand the checked payloads to the person's wallet.
-		return e.prepareExternal(w, req, q, bracket, usd, tok, p)
+		return e.prepareExternal(w, req, q, bracket, usd, tok, ch, p)
 	}
 
 	// Allowances (capped, after the guards).
@@ -588,6 +602,7 @@ type expect struct {
 	from, to string
 	exact    *big.Int // fromAmount must equal this (±1 unit), or
 	max      *big.Int // fromAmount must not exceed this (+1 unit)
+	chainID  int64    // 0 = the home chain (Base)
 }
 
 // flashOrderType is the FlashOrder struct as Flash returns it (checked
@@ -599,7 +614,8 @@ var flashOrderType = []evm.TypedField{
 }
 
 // guardTypedData refuses any payload that is not exactly the order we mean:
-// Base chain id, pinned settlement contract, FlashOrder shape, our wallet as
+// the chain we asked for (Base unless an own-wallet order picked another),
+// pinned settlement contract (the same address on every EVM chain), FlashOrder shape, our wallet as
 // swapper and recipient, the right tokens and amount, a pinned vault and a
 // deadline in the future.
 func (e *Executor) guardTypedData(raw, funder string, x expect) error {
@@ -611,8 +627,12 @@ func (e *Executor) guardTypedData(raw, funder string, x expect) error {
 	if !ok {
 		return errors.New("typed data has no chainId; refusing to sign")
 	}
-	if n, err := evm.ToBigInt(cid); err != nil || n.Int64() != e.cfg.ChainID {
-		return fmt.Errorf("typed data chainId %v != %d", cid, e.cfg.ChainID)
+	want := e.cfg.ChainID
+	if x.chainID != 0 {
+		want = x.chainID
+	}
+	if n, err := evm.ToBigInt(cid); err != nil || n.Int64() != want {
+		return fmt.Errorf("typed data chainId %v != %d", cid, want)
 	}
 	vc, _ := td.Domain["verifyingContract"].(string)
 	if vc == "" {
@@ -673,19 +693,32 @@ func (e *Executor) guardTypedData(raw, funder string, x expect) error {
 // they are plain approvals to the pinned settlement contract on our tokens,
 // i.e. exactly what our own approve already covers.
 func (e *Executor) checkSetupTxs(txs []string, funder string) error {
+	return e.checkSetupTxsOn(txs, funder, e.cfg.Home())
+}
+
+// checkSetupTxsOn is checkSetupTxs for an order on chain ch.
+func (e *Executor) checkSetupTxsOn(txs []string, funder string, ch config.Chain) error {
+	home := ch.Key == e.cfg.Chain
 	for i, raw := range txs {
 		b, err := evm.DecodeHex(raw)
 		if err != nil {
 			return fmt.Errorf("setup tx %d: %w", i, err)
 		}
-		tx, err := evm.DecodeDynamicFeeTx(b)
+		// EIP-1559 everywhere except legacy-gas chains (BNB Chain), where
+		// Flash's unsigned approve may carry no chain id at all; it is only
+		// inspected (never signed), and the checks below still apply.
+		tx, err := evm.DecodeAnyTx(b)
 		if err != nil {
 			return fmt.Errorf("setup tx %d: %w; refusing (unknown onchain prep)", i, err)
 		}
-		if tx.ChainID.Int64() != e.cfg.ChainID {
+		if tx.ChainID != nil && tx.ChainID.Int64() != ch.ID {
 			return fmt.Errorf("setup tx %d is for chain %s", i, tx.ChainID)
 		}
-		if tx.Value.Sign() != 0 || !(strings.EqualFold(tx.To, e.cfg.USDC) || e.isToken(tx.To)) {
+		if tx.ChainID == nil && b[0] == 0x02 {
+			return fmt.Errorf("setup tx %d has no chain id; refusing", i)
+		}
+		ours := strings.EqualFold(tx.To, ch.USDC.Address) || strings.EqualFold(tx.To, ch.ETH.Address) || (home && e.isToken(tx.To))
+		if tx.Value.Sign() != 0 || !ours {
 			return fmt.Errorf("setup tx %d is not a USDC/WETH approval (to %s); refusing", i, tx.To)
 		}
 		spender, _, ok := evm.ParseApprove(tx.Data)

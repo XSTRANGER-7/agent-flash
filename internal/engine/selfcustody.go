@@ -43,7 +43,33 @@ func (e *Engine) SelfPrepare(ctx context.Context, addr string, in referee.Intent
 	if in.Style == "stop" {
 		return nil, deny("ORDER_TYPE", "stop buys need a second signature after the fill; from your own wallet use market, limit or DCA"), nil
 	}
-	usdc, _, err := e.Balances(ctx, w, 0)
+	// Another chain: real money only (paper money lives on the home chain),
+	// ETH only, so the onchain ETH price still checks Flash's price.
+	ch := e.Cfg.Home()
+	if in.Chain != "" && !strings.EqualFold(in.Chain, ch.Key) {
+		c, ok := e.Cfg.ChainByKey(in.Chain)
+		switch {
+		case !ok || !c.Tradeable():
+			return nil, deny("CHAIN", "the arena does not trade on "+in.Chain), nil
+		case e.Cfg.Paper:
+			return nil, deny("CHAIN", c.Name+" orders use real money; this server runs paper money, which lives on "+ch.Name), nil
+		case !strings.EqualFold(in.Token, e.Cfg.TradeAsset) && !strings.EqualFold(in.Token, "ETH") && !strings.EqualFold(in.Token, c.ETH.Symbol):
+			return nil, deny("TOKEN", "on "+c.Name+" the arena trades ETH"), nil
+		}
+		ch = c
+		in.Token, in.Chain, in.ChainToken = e.Cfg.TradeAsset, c.Key, c.ETH.Address
+	} else {
+		in.Chain, in.ChainToken = "", ""
+	}
+	foreign := in.Chain != ""
+	var usdc float64
+	if foreign {
+		var cb ChainBalance
+		cb, err = e.ChainBalances(ctx, ch, w.Address())
+		usdc = cb.USDC
+	} else {
+		usdc, _, err = e.Balances(ctx, w, 0)
+	}
 	if err != nil {
 		return nil, referee.Decision{}, err
 	}
@@ -65,7 +91,10 @@ func (e *Engine) SelfPrepare(ctx context.Context, addr string, in referee.Intent
 		ref = e.tokenPrice(tok.Address)
 	}
 	opts := BuyOpts{External: true, Style: in.Style, MaxSlippage: in.MaxSlippage, NoNetTargets: true}
-	if !strings.EqualFold(tok.Address, e.Cfg.WETH) {
+	if foreign {
+		ct := ch.ETH
+		opts.Token, opts.Chain = &ct, &ch
+	} else if !strings.EqualFold(tok.Address, e.Cfg.WETH) {
 		opts.Token = &tok
 	}
 	if in.Style == "twap" {

@@ -23,6 +23,7 @@ its Flash payload is checked field by field.
 | **Invest with an agent** | The agent trades your sub-wallet directly on every signal. |
 | **Auto-trade plans** | Pick the coin (WETH, cbBTC), brain (AI auto-pilot or a strategy), entry style, $ per trade, budget, TP/SL, slippage, trades per day, loss limit and duration. |
 | **Your own wallet** | Non-custodial: MetaMask, Coinbase Wallet or any EIP-1193 wallet signs the FlashOrder itself. Trade or copy a signal without giving us a key. |
+| **Many chains** | From your own wallet, buy ETH with a take profit / stop loss on **8 chains Flash executes on**: Base, Ethereum, Arbitrum, Optimism, Polygon, BNB Chain, Avalanche and Ink. The wallet switches network, approves (capped) and signs there. The home page shows a live ticker of 11 chains: gas-coin price from a real Flash quote, Flash's all-in cost, gas and block from each chain's RPC. |
 | **Social** | Share cards and preview pages for X, Telegram, WhatsApp and TikTok (phone share sheet). Public signals feed (JSON + RSS). A signal bot posts agent trades to Discord and Telegram. Live feed and win/lose predictions. |
 | **Sub-wallets** | Limits, pause, loss limit (auto-pause), withdraw only to a locked payout address, revoke approvals, emergency stop. |
 | **Fees** | Integrator fee on every trade (`FLASH_FEE_BPS`, 10 = 0.10%), with fees earned shown in the app. |
@@ -231,7 +232,31 @@ CLI version: `MODE=live ./bin/arena smoke -wallet trendhunter -test`. It signs a
 submits one order, but the server does not track it, so prefer the UI.
 
 Every real order then shows on the **Onchain proof** page (`#/proof`) with its
-Flash order id and Base transactions linked to Basescan.
+Flash order id and transactions linked to the chain's explorer (Basescan for Base).
+
+### Other chains (your own wallet)
+
+Flash executes on 14 EVM chains with one settlement contract
+(`0x5d00…8f78`, the same address on each) and, for this integrator, one vault
+(`0x4cdc…b893`), so the pins we use on Base hold everywhere. From **your own
+wallet** you can buy ETH on Base, Ethereum, Arbitrum, Optimism, Polygon, BNB Chain,
+Avalanche and Ink (`TRADE_CHAINS`). Every order there gets the same checks as on
+Base: the typed data must carry that chain's id, that chain's USDC and ETH token,
+the exact amount, your address as swapper and recipient, the pinned settlement
+contract and vault; approvals are capped; Flash's mark is checked against the
+onchain ETH price (ETH is one asset everywhere) and the all-in cost against
+`MAX_ENTRY_COST_PCT` (a $5 order on Ethereum mainnet costs ~5% and is refused).
+Your wallet switches network to approve and sign; the order itself is gasless.
+Arena wallets (agents, copies, plans) stay on Base, and paper money too: another
+chain is always real money.
+
+Every chain value was checked on Nov 7, 2026: chain names and ids from Flash's
+supported-chains page, USDC from Circle's official list (BNB Chain: Binance-Peg
+USDC, 18 decimals), `symbol()`/`decimals()` read onchain, and a real Flash quote
+per chain. HyperEVM, Monad and Plasma are shown in the ticker (prices, gas) but
+not traded (no ETH market wired there). BNB Chain's setup transactions are legacy
+(type 0) and carry no chain id: they are decoded and must still be a plain
+`approve()` of that chain's USDC to the pinned settlement contract.
 
 ### Gasless: people hold only USDC
 
@@ -342,9 +367,11 @@ Public:
 | GET | `/v1/tokens`, `/v1/plans`, `/v1/plans/{id}` | tradeable coins + prices; auto-trade plans |
 | GET | `/v1/signals`, `/signals.rss` | agent trades as signals (JSON, RSS) for bots and apps |
 | GET | `/s/trade/{id}`, `/s/agent/{id}`, `/s/plan/{id}`, `/s/leaderboard` | share pages with preview cards (X, Telegram, WhatsApp, Discord) |
-| POST | `/v1/wallet/quote` | your own wallet: checked FlashOrder payloads + capped approvals to sign (`{address, token, style, sizeUsd, takeProfitPct, stopLossPct, limitPct, twapMinutes, copyOf}`) |
+| POST | `/v1/wallet/quote` | your own wallet: checked FlashOrder payloads + capped approvals to sign (`{address, chain, token, style, sizeUsd, takeProfitPct, stopLossPct, limitPct, twapMinutes, copyOf}`; `chain` = `arbitrum`, `bsc`, ... buys ETH there) |
 | POST | `/v1/wallet/order` | submit the wallet signatures (`{quoteId, address, entrySignature, bracketSignature}`); verified by ecrecover |
 | GET | `/v1/wallet/{address}` | your own wallet: balances and trades |
+| GET | `/v1/wallet/{address}/chains` | USDC, ETH token and gas coin on every chain an own wallet can trade on (read onchain) |
+| GET | `/v1/chains` | the live chains ticker: gas-coin price (Flash quote), Flash all-in cost, gas, block, 24 h change |
 | GET | `/v1/stats` | season totals + your safety limits (used by the app) |
 | POST | `/v1/me/nonce`, `/v1/me/login` | wallet sign-in (EIP-191 message, one use) -> session token (header `X-Arena-Session`) |
 | GET / POST | `/v1/me`, `/v1/me/account`, `/v1/me/deposit/prepare`, `/v1/me/deposit`, `/v1/me/invest`, `/v1/me/stop`, `/v1/me/pause`, `/v1/me/resume`, `/v1/me/withdraw` | the signed-in person's gasless arena account |
@@ -497,3 +524,5 @@ Agent Arena is released under the MIT licence (see `LICENSE`).
 - Wallet logos in the connect sheet (`internal/web/static/icons/wallets/`): from
   [web3icons](https://github.com/0xa3k5/web3icons) (`@web3icons/core` 4.0.50, MIT licence).
   The logos are trademarks of their owners and are used only to link to each wallet.
+- Chain logos in the ticker and network picker (`internal/web/static/icons/chains/`): from the same
+  web3icons package (branded network icons, MIT licence). Trademarks of their owners.

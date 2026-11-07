@@ -502,6 +502,7 @@ func serve(log *slog.Logger) error {
 		go e.WatchOrders(ctx)
 		go e.SampleEquity(ctx)
 		go e.RunTape(ctx)
+		go e.RunChains(ctx, e.Cfg.ChainsEvery)
 		go e.RunRisk(ctx)
 		go e.Outbox.Run(ctx)
 		go func() { // periodic snapshot

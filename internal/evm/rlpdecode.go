@@ -116,3 +116,56 @@ func DecodeDynamicFeeTx(raw []byte) (*DecodedTx, error) {
 	}
 	return tx, nil
 }
+
+// DecodeLegacyTx decodes a (signed or unsigned) legacy transaction:
+// rlp([nonce, gasPrice, gas, to, value, data, v, r, s]). ChainID is set only
+// when v carries it (EIP-155: unsigned v = chainId, signed v = 35 + 2*id or
+// 36 + 2*id); Flash's unsigned BNB Chain setup txs leave v empty (nil here).
+func DecodeLegacyTx(raw []byte) (*DecodedTx, error) {
+	if len(raw) == 0 || raw[0] < 0xc0 {
+		return nil, errors.New("not a legacy transaction")
+	}
+	it, rest, err := rlpDecode(raw)
+	if err != nil {
+		return nil, err
+	}
+	if len(rest) != 0 || !it.isList || (len(it.list) != 6 && len(it.list) != 9) {
+		return nil, errors.New("malformed legacy transaction")
+	}
+	f := it.list
+	for _, x := range f {
+		if x.isList {
+			return nil, errors.New("malformed legacy transaction field")
+		}
+	}
+	tx := &DecodedTx{
+		Nonce: new(big.Int).SetBytes(f[0].str).Uint64(),
+		Value: new(big.Int).SetBytes(f[4].str),
+		Data:  f[5].str,
+	}
+	switch len(f[3].str) {
+	case 0:
+	case 20:
+		tx.To = ChecksumAddress(f[3].str)
+	default:
+		return nil, errors.New("malformed tx recipient")
+	}
+	if len(f) == 9 && len(f[6].str) > 0 {
+		v := new(big.Int).SetBytes(f[6].str)
+		switch {
+		case len(f[7].str) == 0 && len(f[8].str) == 0: // unsigned EIP-155: v = chainId
+			tx.ChainID = v
+		case v.Cmp(big.NewInt(35)) >= 0: // signed EIP-155
+			tx.ChainID = new(big.Int).Div(new(big.Int).Sub(v, big.NewInt(35)), big.NewInt(2))
+		}
+	}
+	return tx, nil
+}
+
+// DecodeAnyTx decodes an EIP-1559 or a legacy transaction.
+func DecodeAnyTx(raw []byte) (*DecodedTx, error) {
+	if len(raw) > 0 && raw[0] == 0x02 {
+		return DecodeDynamicFeeTx(raw)
+	}
+	return DecodeLegacyTx(raw)
+}

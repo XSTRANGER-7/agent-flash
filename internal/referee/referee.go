@@ -45,6 +45,9 @@ type Intent struct {
 	NetTargets      string  `json:"-"` // on | off
 	BreakEven       string  `json:"-"` // on | off
 	MaxHoldMin      int     `json:"-"`
+	// Own-wallet orders on another chain Flash executes on ("" = Base):
+	Chain      string `json:"-"` // Flash chain name
+	ChainToken string `json:"-"` // the ETH token's address on that chain
 
 	// Set by the engine only (never by API callers):
 	Liquidity        float64 `json:"-"` // token USD liquidity from Flash /search

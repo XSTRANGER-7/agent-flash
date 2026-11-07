@@ -21,7 +21,9 @@ type proofRow struct {
 	Style          string    `json:"style,omitempty"`
 	SizeUSD        float64   `json:"sizeUsd"`
 	Status         string    `json:"status"`
-	Wallet         string    `json:"wallet,omitempty"` // funding address on Base
+	Wallet         string    `json:"wallet,omitempty"`   // funding address
+	Chain          string    `json:"chain,omitempty"`    // Flash chain name ("" = Base)
+	Explorer       string    `json:"explorer,omitempty"` // block explorer for this trade's txs
 	OrderID        string    `json:"orderId,omitempty"`
 	BracketOrderID string    `json:"bracketOrderId,omitempty"`
 	TPOrderID      string    `json:"tpOrderId,omitempty"`
@@ -55,6 +57,9 @@ func (s *Server) proof(w http.ResponseWriter, r *http.Request) {
 			USDCSpent: t.USDCSpent, USDCReceived: t.USDCReceived, CostUSD: t.EntryCostUSD, PnLUSD: t.PnLUSD}
 		if t.Kind == "self" {
 			row.Who = "Own wallet"
+		}
+		if ch, ok := s.E.Cfg.ChainByKey(t.Chain); ok {
+			row.Chain, row.Explorer = ch.Key, ch.Explorer
 		}
 		if wl, ok := s.E.Wallets.Get(t.WalletID); ok {
 			row.Wallet = wl.Address()

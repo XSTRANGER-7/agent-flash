@@ -105,6 +105,24 @@ func (c *RPC) ETHBalance(ctx context.Context, addr string) (*big.Int, error) {
 	return hexBig(s), nil
 }
 
+// GasPrice is eth_gasPrice in wei.
+func (c *RPC) GasPrice(ctx context.Context) (*big.Int, error) {
+	var s string
+	if err := c.call(ctx, &s, "eth_gasPrice"); err != nil {
+		return nil, err
+	}
+	return hexBig(s), nil
+}
+
+// BlockNumber is eth_blockNumber.
+func (c *RPC) BlockNumber(ctx context.Context) (uint64, error) {
+	var s string
+	if err := c.call(ctx, &s, "eth_blockNumber"); err != nil {
+		return 0, err
+	}
+	return hexBig(s).Uint64(), nil
+}
+
 // Fees returns (tipCap, feeCap) using 2*baseFee + tip.
 func (c *RPC) Fees(ctx context.Context) (*big.Int, *big.Int, error) {
 	var tipS string

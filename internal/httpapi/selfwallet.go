@@ -36,6 +36,7 @@ func (s *Server) selfQuote(w http.ResponseWriter, r *http.Request) {
 		TwapMinutes    int     `json:"twapMinutes"`
 		MaxSlippagePct float64 `json:"maxSlippagePct"`
 		CopyOf         string  `json:"copyOf"`
+		Chain          string  `json:"chain"` // "" or "base" = Base; else another chain Flash executes on (ETH only)
 	}
 	if err := decode(r, &in); err != nil {
 		writeErr(w, 400, err.Error())
@@ -51,6 +52,20 @@ func (s *Server) selfQuote(w http.ResponseWriter, r *http.Request) {
 	}
 	intent := referee.Intent{Token: firstNonEmpty(in.Token, s.E.Cfg.TradeAsset), SizeUSD: in.SizeUSD, Style: firstNonEmpty(in.Style, "market"),
 		TwapMinutes: in.TwapMinutes, Reason: "from my own wallet"}
+	ch := s.E.Cfg.Home()
+	if in.Chain != "" {
+		c, ok := s.E.Cfg.ChainByKey(in.Chain)
+		if !ok || !c.Tradeable() {
+			writeErr(w, 400, "unknown or untradeable chain")
+			return
+		}
+		ch = c
+	}
+	foreign := ch.Key != s.E.Cfg.Chain
+	if foreign {
+		intent.Chain, intent.Token = ch.Key, s.E.Cfg.TradeAsset // ETH on that chain, priced like ETH everywhere
+		intent.Reason = "from my own wallet on " + ch.Name
+	}
 	tpPct, slPct := in.TakeProfitPct, in.StopLossPct
 	if in.CopyOf != "" { // copy a signal: same coin and the same % targets
 		src, ok := s.E.Store.Trade(in.CopyOf)
@@ -61,6 +76,13 @@ func (s *Server) selfQuote(w http.ResponseWriter, r *http.Request) {
 		intent.Token, intent.AgentID, intent.CopyOf = tokenOr(src.Token), src.AgentID, src.ID
 		tpPct, slPct = (src.TakeProfit/src.Entry-1)*100, (1-src.StopLoss/src.Entry)*100
 		intent.Reason = "copy of " + s.name(*src)
+		if foreign {
+			if !strings.EqualFold(intent.Token, s.E.Cfg.TradeAsset) {
+				writeErr(w, 400, "this signal trades "+intent.Token+"; on "+ch.Name+" the arena trades ETH only")
+				return
+			}
+			intent.Reason += " on " + ch.Name
+		}
 	}
 	if tpPct == 0 {
 		tpPct = 2
@@ -98,7 +120,7 @@ func (s *Server) selfQuote(w http.ResponseWriter, r *http.Request) {
 	case !d.OK:
 		writeJSON(w, 422, map[string]any{"decision": d})
 	default:
-		writeJSON(w, 200, map[string]any{"quote": p.External, "mode": s.E.Cfg.ModeName(), "chainId": s.E.Cfg.ChainID,
+		writeJSON(w, 200, map[string]any{"quote": p.External, "mode": s.E.Cfg.ModeName(), "chainId": ch.ID, "chain": ch.Key, "chainName": ch.Name, "native": ch.Native,
 			"summary": map[string]any{"token": tok.Symbol, "sizeUsd": in.SizeUSD, "style": intent.Style, "mark": p.MarkPrice, "costPct": p.CostPct,
 				"costUsd": p.CostUSD, "takeProfit": p.TakeProfit, "stopLoss": p.StopLoss, "entryLimit": intent.EntryLimit}})
 	}

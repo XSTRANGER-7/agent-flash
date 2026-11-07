@@ -23,9 +23,24 @@ const initials = (name) => (name || "?").split(/\s+/).map((w) => w[0]).join("").
 const isAddr = (a) => typeof a === "string" && /^0x[0-9a-fA-F]{40}$/.test(a);
 const isHash = (h) => typeof h === "string" && /^0x[0-9a-fA-F]{64}$/.test(h);
 const EXT = 'target="_blank" rel="noopener noreferrer"';
-const addrLink = (a) => (isAddr(a) ? `<a class="link mono" href="https://basescan.org/address/${a}" ${EXT}>${esc(short(a))}</a>` : esc(a || "—"));
-// Real Base tx hashes link to Basescan; paper fills and dry runs have none.
-const txLink = (h) => (isHash(h) ? `<a class="link mono" href="https://basescan.org/tx/${h}" ${EXT}>${esc(short(h))}</a>`
+// Chains Flash executes on: display name and block explorer (live prices,
+// gas and balances come from the server: /v1/chains, /v1/wallet/{a}/chains).
+const CHAIN = {
+  base: ["Base", "https://basescan.org", "0x2105"], ethereum: ["Ethereum", "https://etherscan.io", "0x1"],
+  arbitrum: ["Arbitrum", "https://arbiscan.io", "0xa4b1"], optimism: ["Optimism", "https://optimistic.etherscan.io", "0xa"],
+  polygon: ["Polygon", "https://polygonscan.com", "0x89"], bsc: ["BNB Chain", "https://bscscan.com", "0x38"],
+  avalanche: ["Avalanche", "https://snowtrace.io", "0xa86a"], ink: ["Ink", "https://explorer.inkonchain.com", "0xdef1"],
+  hyperevm: ["HyperEVM", "https://hyperscan.com", "0x3e7"], monad: ["Monad", "https://monadvision.com", "0x8f"],
+  plasma: ["Plasma", "https://plasmascan.to", "0x2611"],
+};
+const chainName = (k) => (CHAIN[k] || CHAIN.base)[0];
+const explorer = (k) => (CHAIN[k] || CHAIN.base)[1];
+const chainLogo = (k, size = 20) => (CHAIN[k] ? `<img class="ch-logo" src="/icons/chains/${k}.svg" alt="" width="${size}" height="${size}" decoding="async">` : "");
+const offBase = (k) => !!k && k !== "base" && !!CHAIN[k];
+const chainChip = (k) => (offBase(k) ? `<span class="mini mini-chain">${chainLogo(k, 14)}${esc(chainName(k))}</span>` : "");
+const addrLink = (a, chain) => (isAddr(a) ? `<a class="link mono" href="${explorer(chain)}/address/${a}" ${EXT}>${esc(short(a))}</a>` : esc(a || "—"));
+// Real tx hashes link to their chain's explorer (Basescan for Base); paper fills and dry runs have none.
+const txLink = (h, chain) => (isHash(h) ? `<a class="link mono" href="${explorer(chain)}/tx/${h}" ${EXT}>${esc(short(h))}</a>`
   : typeof h === "string" && h.startsWith("paper") ? '<span class="mono muted">paper fill</span>'
   : h === "dryrun" ? '<span class="mono muted">not sent (dry run)</span>' : "—");
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1).replace(/_/g, " ") : "");
@@ -628,7 +643,7 @@ const REASONS = {
   REASON_ORDER_CANNOT_BE_PLACED: "Flash could not place the order",
 };
 const reasonText = (code) => (code ? REASONS[code] || cap(String(code).replace(/^REASON_/, "").toLowerCase()) : "");
-const approveText = (h) => (isHash(h) ? txLink(h) : h === "paper" ? '<span class="mono muted">simulated (paper)</span>' : h === "dryrun" ? '<span class="mono muted">not sent (dry run)</span>' : '<span class="muted">not needed</span>');
+const approveText = (h, chain) => (isHash(h) ? txLink(h, chain) : h === "paper" ? '<span class="mono muted">simulated (paper)</span>' : h === "dryrun" ? '<span class="mono muted">not sent (dry run)</span>' : '<span class="muted">not needed</span>');
 const PROTECTION = { pending: "Waiting for the entry to fill", active: "Take profit and stop loss live on Flash", none: "No exit order" };
 
 // Empty states: an icon, one line, one button.
@@ -837,6 +852,12 @@ async function pageHome(page) {
     </div>
   </section>
 
+  <section class="chains-band" data-chains aria-labelledby="chains-title">
+    <div class="cb-head"><p class="cb-live" id="chains-title"><i aria-hidden="true"></i>Live on Flash</p><span class="cb-count num" data-chains-n>Every chain</span>
+      <button type="button" class="btn btn-primary btn-sm cb-cta" data-chains-trade hidden>Trade from your wallet</button></div>
+    <div class="cb-rail" data-chains-rail><div class="cb-track" data-chains-track aria-busy="true">${'<span class="cb-item cb-sk"><span class="skel sk-dot"></span><span class="sk-stack"><span class="skel sk-line sk-w60"></span><span class="skel sk-line sk-w40"></span></span></span>'.repeat(6)}</div></div>
+  </section>
+
   <div class="ticker" data-ticker hidden aria-label="Latest arena events"><div class="ticker-track" data-ticker-track></div></div>
 
   <section class="section">
@@ -845,7 +866,7 @@ async function pageHome(page) {
       <div><dt>Open now</dt><dd class="num" data-tally="openTrades" data-countup data-fmt="int">—</dd></div>
       <div><dt>Fees earned</dt><dd class="num" data-fees>—</dd></div>
     </dl>
-    <p class="footnote"><a class="link" href="#/proof">Onchain proof: real Flash orders with Base transactions</a></p>
+    <p class="footnote"><a class="link" href="#/proof">Onchain proof: real Flash orders and their transactions</a></p>
   </section>
 
   <section class="section auto-show">
@@ -1089,13 +1110,53 @@ async function pageHome(page) {
   };
   if (!state.feed.length) await loadFeedOnce();
   renderTicker();
+  const chainsTick = wireChains(page);
   const t = setInterval(() => { renderBoard(); renderAuto(); }, 30000);
   const qt = setInterval(async () => {
     if (document.visibilityState !== "visible") return;
     try { state.flash = await api("/v1/flash/status"); updateChrome(); } catch { /* keep last */ }
     renderQuote();
   }, 10000);
-  return { onPost: renderTicker, onStats: fill, cleanup: () => { clearInterval(t); clearInterval(qt); howStop?.(); } };
+  return { onPost: renderTicker, onStats: fill, cleanup: () => { clearInterval(t); clearInterval(qt); clearInterval(chainsTick); howStop?.(); } };
+}
+
+// Live ticker: every chain Flash executes on. Gas-coin price from a real
+// Flash quote, Flash's all-in cost, gas from the chain's RPC (/v1/chains).
+const gwei = (v) => { const n = num(v); return !known(n) ? "—" : n >= 100 ? n.toFixed(0) : n >= 1 ? n.toFixed(1) : String(+n.toPrecision(2)); };
+const coinPx = (v) => { const n = num(v); return !(n > 0) ? "—" : n >= 1 ? price(n) : "$" + n.toPrecision(3); };
+function chainItem(c) {
+  const chg = known(c.change24h) ? `<span class="cb-chg ${signClass(c.change24h)} num" title="24-hour change">${+c.change24h >= 0 ? "▲" : "▼"} ${esc(Math.abs(+c.change24h).toFixed(2))}%</span>` : "";
+  return `${chainLogo(c.key, 30)}<span class="cb-name"><b>${esc(c.name)}</b><small>${esc(c.native)}</small></span>
+    <span class="cb-px num" title="${esc(c.native)} price, from a live Flash quote">${esc(coinPx(c.price))}</span>${chg}
+    <span class="cb-meta"><span title="Gas price on ${esc(c.name)}">Gas <b class="num">${esc(gwei(c.gasGwei))}</b> gwei</span>${known(c.costPct) ? `<span title="Flash all-in cost to buy $25 of ${esc(c.native)}">Flash <b class="num">${esc(fixed(c.costPct, 2))}%</b></span>` : ""}</span>`;
+}
+function wireChains(page) {
+  const band = $("[data-chains]", page);
+  if (!band) return 0;
+  let keys = "";
+  const render = (d) => {
+    const list = (d?.chains || []).filter((c) => CHAIN[c.key] && c.price > 0);
+    const track = $("[data-chains-track]", band);
+    if (!list.length) return;
+    $("[data-chains-n]", band).textContent = `${list.length} chains`;
+    const trade = (d.tradeChains || []).filter((k) => CHAIN[k]);
+    const cta = $("[data-chains-trade]", band);
+    if (cta) { cta.hidden = modeOf() === "paper" || trade.length < 2; cta.textContent = `Trade on ${trade.length} chains`; }
+    const k = list.map((c) => c.key).join();
+    if (k !== keys) { // first paint (or the list changed): build both runs
+      keys = k;
+      const one = list.map((c) => `<span class="cb-item" data-ck="${esc(c.key)}">${chainItem(c)}</span>`).join("");
+      track.removeAttribute("aria-busy");
+      track.innerHTML = `<div class="cb-run">${one}</div><div class="cb-run" aria-hidden="true">${one}</div>`;
+      track.style.setProperty("--cb-dur", `${Math.max(40, list.length * 7)}s`);
+      return;
+    }
+    for (const c of list) $$(`[data-ck="${c.key}"]`, track).forEach((el) => (el.innerHTML = chainItem(c))); // in place: the scroll keeps going
+  };
+  const load = () => api("/v1/chains").then(render).catch(() => {});
+  $("[data-chains-trade]", band)?.addEventListener("click", () => walletTrade());
+  load();
+  return setInterval(() => { if (document.visibilityState === "visible") load(); }, 60000);
 }
 
 async function pageLeaderboard(page) {
@@ -1587,7 +1648,7 @@ function renderTrade(body, d) {
     <header class="trade-head">
       <p class="eyebrow" data-reveal>${who} · ${esc(new Date(t.createdAt).toLocaleString())}${t.copyOf ? ` · copy by ${esc(t.walletId)}` : ""}</p>
       <div class="trade-title" data-reveal><h1>${t.copyOf ? "Copied long " : "Long "}${esc(sym)}</h1>${statusChip(t.status)}</div>
-      <p class="trade-tags" data-reveal>${t.paper ? '<span class="mini mini-paper">Paper money</span>' : ""}${t.test ? '<span class="mini mini-test">Test</span>' : ""}${styleChip(t.style)}<span class="mini">${esc(protectLabel(t))}</span>${t.kind ? `<span class="mini">${esc(KIND_LABEL[t.kind] || cap(t.kind))}</span>` : ""}${self && OPEN.has(t.status) ? '<span class="mini">Managed by your wallet</span>' : ""}${t.walletId && t.walletId !== t.agentId && !self ? `<span class="mini">Wallet ${esc(t.walletId)}</span>` : ""}</p>
+      <p class="trade-tags" data-reveal>${t.paper ? '<span class="mini mini-paper">Paper money</span>' : ""}${t.test ? '<span class="mini mini-test">Test</span>' : ""}${chainChip(t.chain)}${styleChip(t.style)}<span class="mini">${esc(protectLabel(t))}</span>${t.kind ? `<span class="mini">${esc(KIND_LABEL[t.kind] || cap(t.kind))}</span>` : ""}${self && OPEN.has(t.status) ? '<span class="mini">Managed by your wallet</span>' : ""}${t.walletId && t.walletId !== t.agentId && !self ? `<span class="mini">Wallet ${esc(t.walletId)}</span>` : ""}</p>
       <blockquote class="reason" data-reveal>${esc(t.reason || "No reason given.")}</blockquote>
       ${t.status === "unprotected" ? `<p class="alert" data-reveal><strong>No exit order.</strong> The bracket ended but the wallet still holds ${esc(sym)}. ${op ? "Use Exit now to sell at market." : "Only the operator can close it from here."}</p>` : ""}
       ${op && (t.status === "placed" || t.status === "filled" || t.status === "unprotected") ? `<div class="btn-row op-actions" data-reveal>
@@ -1636,12 +1697,13 @@ function renderTrade(body, d) {
         </dl>
         <p class="glabel">Onchain</p>
         <dl class="receipt">
-          <div><dt>Approval</dt><dd>${approveText(t.approveTx)}</dd></div>
+          ${offBase(t.chain) ? `<div><dt>Network</dt><dd>${esc(chainName(t.chain))}</dd></div>` : ""}
+          <div><dt>Approval</dt><dd>${approveText(t.approveTx, t.chain)}</dd></div>
           <div><dt>Flash order</dt><dd class="mono">${t.orderId ? esc(short(t.orderId)) : "—"}</dd></div>
           <div><dt>${t.tpOrderId ? "Stop loss order" : "Bracket order"}</dt><dd class="mono">${t.bracketOrderId ? esc(short(t.bracketOrderId)) : "—"}</dd></div>
           ${t.tpOrderId ? `<div><dt>Take profit order</dt><dd class="mono">${esc(short(t.tpOrderId))}</dd></div>` : ""}
-          <div><dt>Entry tx</dt><dd>${txLink(t.entryTx)}</dd></div>
-          <div><dt>Exit tx</dt><dd>${txLink(t.exitTx)}</dd></div>
+          <div><dt>Entry tx</dt><dd>${txLink(t.entryTx, t.chain)}</dd></div>
+          <div><dt>Exit tx</dt><dd>${txLink(t.exitTx, t.chain)}</dd></div>
         </dl>
         <div class="section-head section"><h2>Timeline</h2></div>
         <ol class="timeline" data-stagger>${steps.map((s) => `<li><strong>${esc(cap(s.step))}</strong><div class="muted small">${esc(s.detail || "")}</div><time class="when num">${esc(clock(s.at))}</time></li>`).join("")}
@@ -3017,6 +3079,22 @@ async function ensureBase() {
     else throw e;
   }
 }
+// ensureChain switches the wallet to the order's chain (adds it if the
+// wallet does not know it yet, with the chain's public RPC from the server).
+async function ensureChain(c) {
+  if (!c || !offBase(c.key)) return ensureBase();
+  const p = eth(), want = CHAIN[c.key][2];
+  const id = await p.request({ method: "eth_chainId" }).catch(() => "");
+  if (String(id).toLowerCase() === want) return;
+  try { await p.request({ method: "wallet_switchEthereumChain", params: [{ chainId: want }] }); }
+  catch (e) {
+    if (e?.code !== 4902 || !c.rpc) throw e;
+    await p.request({ method: "wallet_addEthereumChain", params: [{ chainId: want, chainName: chainName(c.key), rpcUrls: [c.rpc],
+      nativeCurrency: { name: c.native, symbol: c.native, decimals: 18 }, blockExplorerUrls: [explorer(c.key)] }] });
+  }
+  const now = await p.request({ method: "eth_chainId" }).catch(() => "");
+  if (String(now).toLowerCase() !== want) throw new Error(`Switch your wallet to ${chainName(c.key)} to continue.`);
+}
 const walletErr = (e) => (e?.code === 4001 ? "Cancelled in your wallet." : e?.code === -32002 ? "Your wallet already has a request open. Open it to continue." : e?.message || "Wallet error");
 async function connectWallet() {
   if (!eth() && isPhone) { walletAppSheet(); return ""; }
@@ -3050,7 +3128,8 @@ eth()?.on?.("accountsChanged", (a) => {
   setWallet(next);
 });
 eth()?.on?.("chainChanged", (id) => {
-  if (wallet.address && String(id).toLowerCase() !== BASE_CHAIN.chainId) toast("Your wallet left Base. Switch back before you trade.", "err");
+  const ours = Object.values(CHAIN).some((c) => c[2] === String(id).toLowerCase());
+  if (wallet.address && !ours && !sheet.open) toast("Your wallet is on a network the arena doesn't use. It switches when you trade.", "err");
   current?.onWallet?.();
 });
 $("[data-wallet-btn]")?.addEventListener("click", () => { if (wallet.address) location.hash = "#/me"; else connectWallet(); });
@@ -3078,16 +3157,38 @@ async function waitReceipt(hash) {
 async function walletTrade(opts = {}) {
   const addr = await ensureWallet();
   if (!addr) return;
-  const [meta, bal] = await Promise.all([
+  const [meta, bal, wch] = await Promise.all([
     api("/v1/tokens").catch(() => null),
     api("/v1/wallet/" + enc(addr)).catch(() => null),
+    api("/v1/wallet/" + enc(addr) + "/chains").catch(() => null),
   ]);
   const tokens = (meta?.tokens || []).filter((t) => t.symbol);
   const L = meta?.limits || {};
   const maxTrade = +(L.maxTradeUsd ?? 5);
-  const usdcBal = num(bal?.usdc);
   const copy = !!opts.copyOf;
   const mode = meta?.mode || modeOf();
+  // Networks: every chain Flash executes on where the arena trades ETH.
+  // Balances are read onchain; the home chain (Base) uses the arena's own
+  // balance read, which is the paper balance in paper mode.
+  const homeKey = wch?.home || "base";
+  const chains = (wch?.chains || []).filter((c) => c.tradeable && CHAIN[c.key]);
+  if (!chains.some((c) => c.key === homeKey)) chains.unshift({ key: homeKey, native: "ETH" });
+  const cbal = Object.fromEntries((wch?.balances || []).map((b) => [b.chain, b]));
+  const chainOf = (k) => chains.find((c) => c.key === k) || chains[0];
+  const ethOnly = copy && (opts.token || "WETH") !== "WETH";
+  const netOff = (k) => k !== homeKey && (mode === "paper" || ethOnly);
+  let chainKey = chains.some((c) => c.key === opts.chain) && !netOff(opts.chain) ? opts.chain : homeKey;
+  const usdcOn = (k) => (k === homeKey ? num(bal?.usdc) : num(cbal[k]?.usdc));
+  let usdcBal = usdcOn(chainKey);
+  const coinOptions = (k) => (k !== homeKey
+    ? `<option value="WETH" selected>ETH · ${esc(chainOf(k).eth?.symbol || "WETH")} on ${esc(chainName(k))}</option>`
+    : (tokens.length ? tokens : [{ symbol: opts.token || "WETH" }]).map((t) => `<option value="${esc(t.symbol)}" ${t.symbol === (opts.token || "WETH") ? "selected" : ""}>${esc(t.symbol)}${known(t.price) ? " · " + esc(price(t.price)) : ""}</option>`).join(""));
+  const netNote = (k) => {
+    if (k === homeKey) return "";
+    const c = chainOf(k), nat = num(cbal[k]?.native);
+    const gas = known(nat) ? `you have ${fixed(nat, nat >= 1 ? 3 : 5)} ${c.native}` : `check your ${c.native}`;
+    return `<span class="${known(nat) && nat <= 0 ? "warn" : ""}">Your wallet switches to ${esc(chainName(k))} to sign. A first approval there is an onchain transaction paid in ${esc(c.native)} (${esc(gas)}); the order itself is gasless.</span>`;
+  };
   const modeChip = mode ? `<span class="mini ${mode === "live" ? "mini-live" : "mini-paper"}">${esc(MODE_INFO[mode]?.badge || mode)}</span>` : "";
   let timer = 0;
   const stop = () => { clearInterval(timer); timer = 0; };
@@ -3096,14 +3197,19 @@ async function walletTrade(opts = {}) {
   delete sheet.dataset.kind;
   const head = (t) => `<div class="sheet-head"><h2 id="sheet-title">${esc(t)}</h2><button type="button" class="sheet-x" data-sheet-close aria-label="Close">×</button></div>`;
   const form = async () => {
-    const chain = await eth().request({ method: "eth_chainId" }).catch(() => "");
-    const wrongNet = chain && String(chain).toLowerCase() !== BASE_CHAIN.chainId;
+    usdcBal = usdcOn(chainKey);
+    const netField = chains.length > 1 ? `<div class="field net-field"><span class="label">Network</span>
+        <div class="netpick" role="radiogroup" aria-label="Network">${chains.map((c) => {
+          const off = netOff(c.key), b = usdcOn(c.key);
+          return `<label class="net${off ? " is-off" : ""}"><input type="radio" name="chain" value="${esc(c.key)}" ${c.key === chainKey ? "checked" : ""} ${off ? "disabled" : ""}><span>${chainLogo(c.key, 22)}<b>${esc(chainName(c.key))}</b><i class="num">${known(b) ? esc(usd(b)) : "—"}</i></span></label>`;
+        }).join("")}</div>
+        <span class="hint" data-net-note>${mode === "paper" ? "Paper money lives on Base; other networks trade real money." : ethOnly ? "This signal's coin trades on Base only." : netNote(chainKey) || "USDC in your wallet on each network. Flash pays every order's gas."}</span></div>` : "";
     sheet.innerHTML = `${head(copy ? `Copy ${opts.from || "this trade"}` : "Trade from your wallet")}
-      <p class="mode-note">${modeChip}<span class="mini num">${esc(short(addr))}</span>${known(usdcBal) ? `<span class="mini num">${esc(usd(usdcBal))} USDC</span>` : ""}</p>
-      ${wrongNet ? `<p class="alert">Your wallet is on another network. The arena trades on Base. <button type="button" class="btn btn-sm btn-ghost" data-switch>Switch to Base</button></p>` : ""}
+      <p class="mode-note">${modeChip}<span class="mini num">${esc(short(addr))}</span><span class="mini num" data-wt-bal>${known(usdcBal) ? `${esc(usd(usdcBal))} USDC${offBase(chainKey) ? " on " + esc(chainName(chainKey)) : ""}` : ""}</span></p>
       <form class="wt-form" data-wt novalidate>
+        ${netField}
         <div class="form-grid form-2">
-          <div class="field"><label for="wt-token">Coin</label><select id="wt-token" name="token" ${copy ? "disabled" : ""}>${(tokens.length ? tokens : [{ symbol: opts.token || "WETH" }]).map((t) => `<option value="${esc(t.symbol)}" ${t.symbol === (opts.token || "WETH") ? "selected" : ""}>${esc(t.symbol)}${known(t.price) ? " · " + esc(price(t.price)) : ""}</option>`).join("")}</select></div>
+          <div class="field"><label for="wt-token">Coin</label><select id="wt-token" name="token" ${copy || chainKey !== homeKey ? "disabled" : ""}>${coinOptions(chainKey)}</select></div>
           <div class="field"><label for="wt-size">Size ($)</label><input id="wt-size" name="sizeUsd" type="number" min="1" max="${maxTrade}" step="0.5" value="${Math.min(10, maxTrade)}" inputmode="decimal" required><span class="hint">$1 to ${esc(usd(maxTrade, 0))}</span></div>
         </div>
         ${copy ? `<p class="chips field-gap"><span class="mini">Same coin, TP and SL as the signal</span></p>` : `
@@ -3118,21 +3224,26 @@ async function walletTrade(opts = {}) {
         <p class="ticket-preview num" data-wt-sum aria-live="polite"></p>
         <div class="btn-row sheet-cta"><button class="btn btn-primary btn-block" type="submit">Get quote</button></div>
       </form>`;
-    $("[data-switch]", sheet)?.addEventListener("click", async (e) => {
-      const done = busy(e.currentTarget, "Switching…");
-      try { await ensureBase(); toast("Switched to Base", "ok"); form(); } catch (err) { toast(walletErr(err), "err"); done(); }
-    });
     const f = $("[data-wt]", sheet);
     liveNumbers(f);
     const sync = () => {
       const v = Object.fromEntries(new FormData(f));
+      const k = v.chain || homeKey;
+      if (k !== chainKey) { // network changed: its balance, its coin, its note
+        chainKey = k; usdcBal = usdcOn(k);
+        const sel = $("#wt-token", f);
+        sel.innerHTML = coinOptions(k); sel.disabled = copy || k !== homeKey;
+        $("[data-wt-bal]", sheet).textContent = known(usdcBal) ? `${usd(usdcBal)} USDC${offBase(k) ? " on " + chainName(k) : ""}` : "";
+        const note = $("[data-net-note]", f);
+        if (note) note.innerHTML = netNote(k) || "USDC in your wallet on each network. Flash pays every order's gas.";
+      }
       const st = v.style || "market";
       $$("[data-when]", f).forEach((el) => (el.hidden = el.dataset.when !== st));
-      const size = num(v.sizeUsd), tk = copy ? opts.token : v.token;
+      const size = num(v.sizeUsd), tk = chainKey !== homeKey ? "ETH" : copy ? opts.token : v.token;
       const low = known(usdcBal) && size > usdcBal;
       const how = copy ? "at market, with the signal's TP / SL" : { market: "at market", limit: `${fixed(v.limitPct, 1)}% below the price`, twap: `over ${v.twapMinutes || "?"} min` }[st];
       $("[data-wt-sum]", f).innerHTML = Number.isFinite(size) && size > 0
-        ? `Buys ${esc(usd(size))} of ${esc(tk)} ${esc(how)}${copy ? "" : ` · TP +${esc(fixed(v.takeProfitPct, 1))}% · SL −${esc(fixed(v.stopLossPct, 1))}%`}.${low ? `<br><span class="warn">Your wallet has ${esc(usd(usdcBal))} USDC. Lower the size or add funds.</span>` : ""}`
+        ? `Buys ${esc(usd(size))} of ${esc(tk)} ${esc(how)}${offBase(chainKey) ? " on " + esc(chainName(chainKey)) : ""}${copy ? "" : ` · TP +${esc(fixed(v.takeProfitPct, 1))}% · SL −${esc(fixed(v.stopLossPct, 1))}%`}.${low ? `<br><span class="warn">Your wallet has ${esc(usd(usdcBal))} USDC${offBase(chainKey) ? " on " + esc(chainName(chainKey)) : ""}. Lower the size or add funds.</span>` : ""}`
         : "Enter a size.";
     };
     f.addEventListener("change", sync); f.addEventListener("input", sync); sync();
@@ -3141,7 +3252,7 @@ async function walletTrade(opts = {}) {
       const bad = checkNumbers(f);
       if (bad) { bad.focus(); return; }
       const v = Object.fromEntries(new FormData(f));
-      const body = { address: addr, token: copy ? opts.token : v.token, sizeUsd: +v.sizeUsd, style: copy ? "market" : v.style || "market",
+      const body = { address: addr, chain: chainKey === homeKey ? "" : chainKey, token: chainKey !== homeKey ? "WETH" : copy ? opts.token : v.token, sizeUsd: +v.sizeUsd, style: copy ? "market" : v.style || "market",
         takeProfitPct: +v.takeProfitPct || 0, stopLossPct: +v.stopLossPct || 0, limitPct: v.style === "limit" ? +v.limitPct || 0 : 0, twapMinutes: v.style === "twap" ? +v.twapMinutes || 0 : 0, copyOf: opts.copyOf || "" };
       if (known(usdcBal) && body.sizeUsd > usdcBal && mode === "live") { toast(`Your wallet has ${usd(usdcBal)} USDC. Lower the size or add funds.`, "err"); return; }
       const done = busy($("button[type=submit]", f), "Getting quote…");
@@ -3152,17 +3263,20 @@ async function walletTrade(opts = {}) {
   const confirmView = (body, r) => {
     const q = r.quote, s = r.summary || {};
     const paper = r.mode === "paper";
+    const ck = r.chain || q.chain || homeKey, cname = r.chainName || chainName(ck);
     const steps = [...(q.approvals || []).map((a) => ["approve", a.label || "Approve USDC"]), ["sign", "Sign the order"], ...(q.bracketTypedData ? [["sign2", "Sign take profit / stop loss"]] : []), ["send", "Send to Flash"]];
     sheet.innerHTML = `${head("Confirm in your wallet")}
-      <p class="mode-note">${paper ? '<span class="mini mini-paper">Paper money</span><span>Nothing leaves your wallet</span>' : r.mode === "dry" ? '<span class="mini mini-paper">Dry run</span><span>Signed, not sent</span>' : '<span class="mini mini-live">Live · real money</span><span>Real USDC on Base</span>'}</p>
+      <p class="mode-note">${paper ? '<span class="mini mini-paper">Paper money</span><span>Nothing leaves your wallet</span>' : r.mode === "dry" ? '<span class="mini mini-paper">Dry run</span><span>Signed, not sent</span>' : '<span class="mini mini-live">Live · real money</span><span>Real USDC on ${esc(cname)}</span>'}</p>
       <dl class="spec spec-tight wt-sum">
-        <div><dt>Buy</dt><dd class="num">${esc(usd(s.sizeUsd))} ${esc(s.token)} · ${esc(styleLabel(s.style))}</dd></div>
+        ${offBase(ck) ? `<div><dt>Network</dt><dd class="net-dd">${chainLogo(ck, 16)}${esc(cname)}</dd></div>` : ""}
+        <div><dt>Buy</dt><dd class="num">${esc(usd(s.sizeUsd))} ${esc(offBase(ck) ? "ETH" : s.token)} · ${esc(styleLabel(s.style))}</dd></div>
         <div><dt>${+s.entryLimit > 0 ? "Limit" : "Price"}</dt><dd class="num">${esc(price(+s.entryLimit > 0 ? s.entryLimit : s.mark))}</dd></div>
         <div><dt>Take profit</dt><dd class="num up">▲ ${esc(price(s.takeProfit))}</dd></div>
         <div><dt>Stop loss</dt><dd class="num down">▼ ${esc(price(s.stopLoss))}</dd></div>
         <div><dt>Flash cost</dt><dd class="num">${known(s.costPct) && +s.costPct > 0 ? `${esc(fixed(s.costPct, 2))}% (${esc(usd(s.costUsd, 3))})` : "—"}</dd></div>
         <div><dt>Quote</dt><dd class="num" data-left>—</dd></div>
       </dl>
+      ${offBase(ck) && (q.approvals || []).length ? `<p class="sheet-text sheet-note">Approvals are onchain on ${esc(cname)} and cost a little ${esc(r.native || chainOf(ck).native || "gas")}. Signing the order is free; Flash pays its gas.</p>` : ""}
       <ol class="wsteps" data-steps aria-live="polite">${steps.map(([, l], i) => `<li data-step="${i}"><span class="wdot" aria-hidden="true"></span><span data-label>${esc(l)}</span></li>`).join("")}</ol>
       <div class="btn-row sheet-cta"><button class="btn btn-primary btn-block" data-go>Sign &amp; place</button><button class="btn btn-plain btn-block" data-requote>New quote</button></div>`;
     const end = new Date(q.expiresAt).getTime();
@@ -3191,11 +3305,11 @@ async function walletTrade(opts = {}) {
       const done = busy(go, "Check your wallet…");
       let i = 0;
       try {
-        await ensureBase();
+        await ensureChain(chainOf(ck));
         for (const a of q.approvals || []) {
           mark(i, "busy");
           const hash = await eth().request({ method: "eth_sendTransaction", params: [{ from: addr, to: a.to, data: a.data, value: a.value || "0x0" }] });
-          mark(i, "busy", `${esc(a.label || "Approve USDC")} · pending ${isHash(hash) ? txLink(hash) : ""}`);
+          mark(i, "busy", `${esc(a.label || "Approve USDC")} · pending ${isHash(hash) ? txLink(hash, ck) : ""}`);
           await waitReceipt(hash);
           mark(i++, "done", `${esc(a.label || "Approve USDC")} · confirmed`);
         }
@@ -3213,7 +3327,7 @@ async function walletTrade(opts = {}) {
         const res = await api("/v1/wallet/order", { method: "POST", body: { quoteId: q.quoteId, address: addr, entrySignature, bracketSignature }, timeout: 60000 });
         mark(i, "done");
         stop(); sheetClose(sheet);
-        toast(paper ? "Placed (paper money)" : "Order sent to Flash", "ok");
+        toast(paper ? "Placed (paper money)" : `Order sent to Flash${offBase(ck) ? " on " + cname : ""}`, "ok");
         if (res?.trade?.id) location.hash = "#/trade/" + enc(res.trade.id);
       } catch (err) {
         let msg = err?.code === 4001 ? walletErr(err) : err?.code === -32002 ? "Your wallet already has a request open. Check it." : err.message || walletErr(err);
@@ -3362,26 +3476,26 @@ async function shareLeaderboard() {
 }
 
 /* ---------------- onchain proof ---------------- */
-// Only real-money trades are listed; each carries the Flash order id and the
-// Base transactions, so anyone can check it on Basescan.
-const txPill = (label, h) => (isHash(h) ? `<a class="txlink" href="https://basescan.org/tx/${h}" ${EXT}>${esc(label)}<span aria-hidden="true"> ↗</span></a>` : "");
+// Only real-money trades are listed; each carries the Flash order id and its
+// onchain transactions, linked to that chain's explorer (Basescan for Base).
+const txPill = (label, h, chain) => (isHash(h) ? `<a class="txlink" href="${explorer(chain)}/tx/${h}" ${EXT}>${esc(label)}<span aria-hidden="true"> ↗</span></a>` : "");
 function proofItem(t) {
   const right = t.pnlUsd != null ? `<span class="num strong">${pnlHTML(t.pnlUsd)}</span>` : "";
   const ids = [t.orderId && `<span class="txid" title="Flash order id">Flash ${esc(short(t.orderId))}</span>`,
     t.bracketOrderId && `<span class="txid" title="Flash exit order id">Exit order ${esc(short(t.bracketOrderId))}</span>`].filter(Boolean).join("");
-  const txs = txPill("Approve tx", t.approveTx) + txPill("Buy tx", t.entryTx) + txPill("Sell tx", t.exitTx);
+  const txs = txPill("Approve tx", t.approveTx, t.chain) + txPill("Buy tx", t.entryTx, t.chain) + txPill("Sell tx", t.exitTx, t.chain);
   return `<li class="proof-item">
     <a class="trade-item" href="#/trade/${enc(t.id)}">${coinIco(t.token)}
-      <div class="t-main"><div class="t-title"><span class="t-name">Long ${esc(t.token)} <span class="num">${esc(usd(t.sizeUsd))}</span></span>${t.kind ? `<span class="mini">${esc(KIND_LABEL[t.kind] || cap(t.kind))}</span>` : ""}</div>
+      <div class="t-main"><div class="t-title"><span class="t-name">Long ${esc(t.token)} <span class="num">${esc(usd(t.sizeUsd))}</span></span>${t.kind ? `<span class="mini">${esc(KIND_LABEL[t.kind] || cap(t.kind))}</span>` : ""}${chainChip(t.chain)}</div>
         <div class="t-meta"><span>${esc(t.who)}</span><span>${esc(ago(t.at))}</span>${t.usdcSpent ? `<span class="num">paid ${esc(fixed(t.usdcSpent, 4))} USDC</span>` : ""}${t.usdcReceived ? `<span class="num">got ${esc(fixed(t.usdcReceived, 4))} USDC</span>` : ""}</div></div>
       <div class="t-right">${statusChip(t.status)}<div>${right}</div></div></a>
-    <div class="proof-links">${t.wallet ? `<span class="txid">Wallet ${addrLink(t.wallet)}</span>` : ""}${ids}${txs || '<span class="txid">Waiting for the onchain fill</span>'}</div>
+    <div class="proof-links">${t.wallet ? `<span class="txid">Wallet ${addrLink(t.wallet, t.chain)}</span>` : ""}${ids}${txs || '<span class="txid">Waiting for the onchain fill</span>'}</div>
   </li>`;
 }
 
 async function pageProof(page) {
   page.innerHTML = `<header class="page-head page-head-row"><div><p class="eyebrow" data-reveal>Onchain proof</p><h1 data-reveal>Real trades on Flash</h1>
-      <p class="lede" data-reveal>Real money only. Every fill links to Base.</p></div>
+      <p class="lede" data-reveal>Real money only. Every fill links to its block explorer.</p></div>
       <div class="btn-row" data-proof-links></div></header>
     <div data-proof>${SK.panel()}${SK.rows(3)}</div>`;
   const box = $("[data-proof]", page);
@@ -3397,7 +3511,7 @@ async function pageProof(page) {
         <div class="stat"><dt>Real orders</dt><dd class="num">${esc(T.orders ?? 0)}</dd></div>
         <div class="stat"><dt>Filled onchain</dt><dd class="num">${esc(T.filled ?? 0)}</dd></div>
         <div class="stat"><dt>Volume via Flash</dt><dd class="num">${esc(usd(T.volumeUsd ?? 0))}</dd></div>
-        <div class="stat"><dt>Base txs</dt><dd class="num">${esc(T.onchainTxs ?? 0)}</dd></div>
+        <div class="stat"><dt>Onchain txs</dt><dd class="num">${esc(T.onchainTxs ?? 0)}</dd></div>
         <div class="stat"><dt>Trading cost</dt><dd class="num">${esc(usd(T.entryCostUsd ?? 0))}</dd></div>
         <div class="stat"><dt>P&amp;L</dt><dd class="num">${pnlHTML(T.pnlUsd ?? 0)}</dd></div>
       </dl>${budget}

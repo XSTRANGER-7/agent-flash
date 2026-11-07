@@ -25,6 +25,8 @@ import (
 // ExternalOrder is what a self-custody wallet signs.
 type ExternalOrder struct {
 	QuoteID          string       `json:"quoteId"`
+	Chain            string       `json:"chain"`   // Flash chain name: the wallet signs and approves there
+	ChainID          int64        `json:"chainId"` // EIP-155 id (the typed data says the same)
 	EntryTypedData   string       `json:"entryTypedData"`
 	BracketTypedData string       `json:"bracketTypedData,omitempty"`
 	Approvals        []ExternalTx `json:"approvals"` // send these first (capped ERC-20 approvals)
@@ -79,18 +81,18 @@ func (e *Executor) capApproveData(tx *flash.EVMTx, token string, decimals int, c
 	return out, amount.String(), err
 }
 
-func (e *Executor) prepareExternal(w *wallet.Wallet, req *flash.QuoteRequest, q *flash.QuoteResponse, bracket bool, usd float64, tok config.Token, p *Placement) (*Placement, error) {
-	x := &ExternalOrder{QuoteID: q.QuoteID, EntryTypedData: q.EVM.OrderTypedData, ExpiresAt: time.Now().Add(4 * time.Minute).UTC(), Approvals: []ExternalTx{}}
+func (e *Executor) prepareExternal(w *wallet.Wallet, req *flash.QuoteRequest, q *flash.QuoteResponse, bracket bool, usd float64, tok config.Token, ch config.Chain, p *Placement) (*Placement, error) {
+	x := &ExternalOrder{QuoteID: q.QuoteID, Chain: ch.Key, ChainID: ch.ID, EntryTypedData: q.EVM.OrderTypedData, ExpiresAt: time.Now().Add(4 * time.Minute).UTC(), Approvals: []ExternalTx{}}
 	if bracket {
 		x.BracketTypedData = q.AttachedBracket.EVM.OrderTypedData
 	}
 	if !e.cfg.Paper { // paper money needs no onchain allowance
 		if q.EVM.ApproveTx != nil {
-			data, amt, err := e.capApproveData(q.EVM.ApproveTx, e.cfg.USDC, 6, math.Min(usd, e.cfg.MaxApprovalUSD))
+			data, amt, err := e.capApproveData(q.EVM.ApproveTx, ch.USDC.Address, ch.USDC.Decimals, math.Min(usd, e.cfg.MaxApprovalUSD))
 			if err != nil {
 				return nil, err
 			}
-			x.Approvals = append(x.Approvals, ExternalTx{To: e.cfg.USDC, Data: fmt.Sprintf("0x%x", data), Value: "0x0", Token: "USDC", Amount: amt,
+			x.Approvals = append(x.Approvals, ExternalTx{To: ch.USDC.Address, Data: fmt.Sprintf("0x%x", data), Value: "0x0", Token: "USDC", Amount: amt,
 				Label: fmt.Sprintf("Allow Flash to spend $%.2f USDC (this order only)", math.Min(usd, e.cfg.MaxApprovalUSD))})
 		}
 		if bracket && q.AttachedBracket.EVM.ApproveTx != nil {

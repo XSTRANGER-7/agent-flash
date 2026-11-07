@@ -110,6 +110,8 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /v1/wallet/quote", s.selfQuote)
 	m.HandleFunc("POST /v1/wallet/order", s.selfOrder)
 	m.HandleFunc("GET /v1/wallet/{address}", s.selfWallet)
+	m.HandleFunc("GET /v1/wallet/{address}/chains", s.walletChains)
+	m.HandleFunc("GET /v1/chains", s.chains)
 	m.HandleFunc("GET /signals.rss", s.signalsRSS)
 	m.HandleFunc("GET /s/{kind}", s.sharePage)
 	m.HandleFunc("GET /s/{kind}/{id}", s.sharePage)

@@ -728,6 +728,11 @@ func selfCustody() {
 	}
 	me := get("/v1/wallet/" + addr)
 	check("your wallet page lists your trades", len(list(me, "trades")) >= 1, fmt.Sprintf("%d trades, USDC %.2f", len(list(me, "trades")), f(me, "usdc")))
+	ch := get("/v1/chains")
+	check("chains Flash executes on are listed", s(ch, "home") == "base" && len(list(ch, "chains")) >= 1 && len(list(ch, "tradeChains")) >= 1,
+		fmt.Sprintf("%d chains, %d tradeable", len(list(ch, "chains")), len(list(ch, "tradeChains"))))
+	c, r = post("/v1/wallet/quote", M{"address": addr, "chain": "arbitrum", "sizeUsd": 20, "takeProfitPct": 2, "stopLossPct": 1})
+	check("paper money stays on Base (another chain is real money)", c == 422 && s(r, "decision", "code") == "CHAIN", fmt.Sprintf("HTTP %d %s", c, errMsg(r)))
 }
 
 func firstNonEmptyS(a, b string) string {
