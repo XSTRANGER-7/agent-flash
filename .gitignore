@@ -4,6 +4,7 @@
 !.env.example
 wallets.json
 wallets.json.*
+deploy.env
 
 # Local state, builds and logs
 data/

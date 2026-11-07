@@ -5,7 +5,9 @@ FROM golang:1.24 AS build
 WORKDIR /src
 COPY go.mod ./
 COPY . .
-RUN CGO_ENABLED=0 go test ./... && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/arena ./cmd/arena
+# Tests gate every build; deploy.sh --skip-tests passes RUN_TESTS=0 for a hotfix.
+ARG RUN_TESTS=1
+RUN if [ "$RUN_TESTS" = "1" ]; then CGO_ENABLED=0 go test ./...; fi && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/arena ./cmd/arena
 # A writable data folder for the nonroot user (distroless has no shell to mkdir).
 RUN mkdir -p /out/data /out/secrets
 
