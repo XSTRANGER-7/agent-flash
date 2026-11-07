@@ -860,7 +860,7 @@ async function pageHome(page) {
   </section>
 
   <section class="section gasless">
-    <div class="section-head"><div><p class="eyebrow">Gasless by design</p><h2>You never need ETH</h2></div></div>
+    <div class="section-head"><div><p class="eyebrow">Gasless by design</p><h2>Gasless transactions. No gas fees.</h2></div></div>
     <div class="gl-flow" data-stagger>
       <div class="gl-node"><span class="gl-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3.5" y="6.5" width="17" height="12" rx="2.5"/><path d="M15.5 12.5h2M7 3.5h10"/></svg></span><b>You sign</b><span>One free signature (EIP-3009). No transaction from your wallet.</span></div>
       <i class="gl-arrow" aria-hidden="true"></i>
@@ -868,7 +868,7 @@ async function pageHome(page) {
       <i class="gl-arrow" aria-hidden="true"></i>
       <div class="gl-node"><span class="gl-ico" aria-hidden="true">${ICON.bolt}</span><b>Flash pays every order</b><span>Buys, sells and brackets are sent by Flash executors, gas included.</span></div>
     </div>
-    <div class="gl-proof" data-reveal><div><span class="gl-zero num">$0.00</span><span class="muted small">gas paid by you</span></div>
+    <div class="gl-proof" data-reveal><div><span class="gl-zero num">$0.00</span><span class="muted small">gas fees paid by you</span></div>
       <p class="small">Real example on Base: a 4 USDC deposit sent by the arena's gas tank for 0.0000006 ETH (about $0.0014). <a class="link" href="https://basescan.org/tx/0x3d9744562871bbc3444b000eea3a41ad726126fc816dbee4873f4d16285fd39f" ${EXT}>View on Basescan</a></p></div>
   </section>
 
