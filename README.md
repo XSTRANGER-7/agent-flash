@@ -8,7 +8,7 @@ orders. People can:
 - share trades and rankings to social apps,
 - copy an agent, or let it trade their own sub-wallet,
 - build an AI auto-trader,
-- trade from their own browser wallet.
+- trade from their own browser wallet, on Base or 7 other chains Flash executes on.
 
 Every order carries a stop loss, passes a rule checker and is signed only after
 its Flash payload is checked field by field.
@@ -25,6 +25,8 @@ its Flash payload is checked field by field.
 | **Your own wallet** | Non-custodial: MetaMask, Coinbase Wallet or any EIP-1193 wallet signs the FlashOrder itself. Trade or copy a signal without giving us a key. |
 | **Many chains** | From your own wallet, buy ETH with a take profit / stop loss on **8 chains Flash executes on**: Base, Ethereum, Arbitrum, Optimism, Polygon, BNB Chain, Avalanche and Ink. The wallet switches network, approves (capped) and signs there. The home page shows a live ticker of 11 chains: gas-coin price from a real Flash quote, Flash's all-in cost, gas and block from each chain's RPC. |
 | **Social** | Share cards and preview pages for X, Telegram, WhatsApp and TikTok (phone share sheet). Public signals feed (JSON + RSS). A signal bot posts agent trades to Discord and Telegram. Live feed and win/lose predictions. |
+| **Saved feed** | Every feed post is kept on disk (`DATA_DIR/feed.jsonl`, newest 20,000), so the feed page has a **Live** view and an **All history** view you can filter and search, and it survives restarts. |
+| **App feel** | Installable PWA with a short launch screen, skeleton loaders while data loads, an install card (Android prompt, iOS steps), and on phones a wallet-app sheet (MetaMask, Coinbase Wallet, Trust, Phantom, OKX) that opens the site inside the wallet's own browser. |
 | **Sub-wallets** | Limits, pause, loss limit (auto-pause), withdraw only to a locked payout address, revoke approvals, emergency stop. |
 | **Fees** | Integrator fee on every trade (`FLASH_FEE_BPS`, 10 = 0.10%), with fees earned shown in the app. |
 | **Modes** | `paper` (mock money, real Flash quotes and signing), `dry` (sign only), `live` (real money, budget cap, agents opt-in). |
@@ -47,6 +49,9 @@ Every row is a real Definitive Flash order that filled on Base. The app's `#/pro
 | Exit: signed cancel of the bracket, then market sell | `b0391807-ae02-4d29-8e42-81038b5c3fd8` | [0xd65d69d0…](https://basescan.org/tx/0xd65d69d0deabd9ff5f38c23312522a0a162de287c807afbb79798e6887a7d37a) |
 | **Copy trade**: a follower's sub-wallet copied the agent, $1.50, same stop loss | `4b54fa34-54c4-4212-ae1f-03dbf7acffb8` | [0x06af2085…](https://basescan.org/tx/0x06af208537556257d5f2fa2a75acc610bfccf52d15f2b3e0e635e7867aadebf2) |
 | Capped approval (exactly the trade size) paid by the arena's gas tank | n/a | [0x033a4000…](https://basescan.org/tx/0x033a4000d2b853577a561589477c1aab772244d17c9b63a4174a91d16e821796) |
+| Kaku agent buy, $2.84 USDC → 0.001246 WETH, bracket attached | `23d0bce4-4ba1-450b-af2f-522547266765`, bracket `8acd2ff9-…` | [0xda56e0fe…](https://basescan.org/tx/0xda56e0fee8ce9b62fc68d458fb0012107564a5f5636cd126910954cfd9cc7aab) |
+| **Copy trade** of it from a follower's sub-wallet, $1.48 → 0.000647 WETH | `b18e3b17-6728-461b-a6e4-ea0f7bce4adf`, bracket `e45e42fe-…` | [0xeb20363b…](https://basescan.org/tx/0xeb20363b19dbbb32710ef95cb543619b308c0896d3464ddde89a4fd853b2268b) |
+| Both closed: signed bracket cancel + market sell, 2.774172 USDC back (−$0.07) and 1.435656 USDC back (−$0.04) | `69dca720-…`, `589e4d6c-…` | [0x57b31562…](https://basescan.org/tx/0x57b3156246e1f5aaa662d349d18dfa47e01a17c07942de2c1b58d66509de3533), [0xc63c9412…](https://basescan.org/tx/0xc63c94123a524916b6bb2cde96abe0d614a7b06d3e15685705258992fc5e54cb) |
 
 Flash executors send every order transaction, so users pay no gas for trades. Profit and loss computed from Flash's
 fills matched the wallet balance change to the cent (−0.030982 USDC both ways).
@@ -67,7 +72,7 @@ time-weighted prices that power backtests and the live trade charts (`internal/a
 
 ## How this was built (AI use)
 
-Built for ETHGlobal Mumbai 2026 by Vikram with **Claude Code** (Anthropic) as an AI pair programmer. Vikram
+Built for ETHGlobal Mumbai 2026 by Sarthak with **Claude Code** (Anthropic) as an AI pair programmer. Sarthak
 chose the product, the features, the sponsor integrations and the safety rules, ran and judged every real-money test,
 and reviewed the results. Claude Code wrote most of the code, tests and docs under that direction. The first commit
 is large because the project lived locally before the repository was created; later work is in smaller commits.
@@ -329,22 +334,26 @@ stays in `.env` on the server and never reaches the page.
 
 | Page | Route | What it does |
 | --- | --- | --- |
-| Arena | `#/` | headline, live scoreboard with equity sparklines, season stats, live ticker, how copying works, the six safety checks with your real limits |
+| Arena | `#/` | headline, top agents, **live chains ticker** (11 chains: price, Flash cost, gas), season stats, live event ticker, how it works, gasless flow, FAQ |
 | Leaderboard | `#/leaderboard` | ranked by Arena Score; return, biggest drop, win rate (finished trades only), followers |
 | Agent | `#/agent/{id}` | profile, Basescan link, equity chart with hover, trades, watch button (alerts), copy panel |
-| Trade | `#/trade/{id}` | stop / entry / target ladder, quoted price and fee from Flash, receipt timeline, win/lose vote, share card (PNG) |
-| Live feed | `#/feed` | Server-Sent Events, filters: trades, copies, blocked, approvals |
-| Approvals | `#/approvals` | pending copies with a countdown ring; approve or reject |
-| Operator | `#/operator` | sign in with `ADMIN_TOKEN` (kept in this tab only), health, Flash connection, $1 real-money test, emergency stop, demo trade |
-| Wallets | `#/wallets` | every sub-wallet: balances, P&L, limits, payout lock; pause, withdraw, revoke, paper top-up, test trade, Flash order history |
+| Trade | `#/trade/{id}` | live price chart, stop / entry / target ladder, quoted price and fee from Flash, network and explorer links, receipt timeline, win/lose vote, share card (PNG) |
+| Live feed | `#/feed` | **Live** (Server-Sent Events + polling) and **All history** (saved, search, filters: trades, copies, blocked, approvals) |
+| Onchain proof | `#/proof` | every real-money order with its Flash order ids and transactions on the chain's explorer |
+| Approvals | `#/admin/approvals` | pending copies with a countdown ring; approve or reject |
+| Operator | `#/admin` (old `#/operator` works) | sign in with `ADMIN_TOKEN` (kept in this tab only), health, Flash connection, $1 real-money test, emergency stop, demo trade |
+| Wallets | `#/admin/wallets` | every sub-wallet: balances, P&L, limits, payout lock; pause, withdraw, revoke, paper top-up, test trade, Flash order history |
 | Auto-trade | `#/plans`, `#/plan/{id}` | build your own plan (coin, AI auto-pilot or a strategy, $ per trade, budget, TP/SL, slippage, limits, duration) and watch what it does |
 | Signals | `#/signals` | every agent trade as a signal: share it, copy it with your own wallet, RSS |
-| My wallet | `#/me` | connect MetaMask / Coinbase Wallet, trade or copy from your own wallet (you sign), your trades |
+| My wallet | `#/me` | connect a wallet (phones: opens in the wallet app), sign in, gasless Arena account, make your own agent, trade or copy from your own wallet on 8 networks (you sign), your trades |
 | Docs | `#/docs` | every feature, order type, safety rule and public API in one page |
 
-PWA: installable (manifest + icons), offline app shell (service worker caches
-the shell; API is network-first with a cached fallback; the live stream and admin
-calls are never cached), update prompt, and alerts for watched agents.
+PWA: installable (manifest + icons + shortcuts), a short launch screen once per
+session, skeleton loaders that keep the layout still while data loads, an install
+card (Android install prompt, iOS "Add to Home Screen" steps; hidden inside wallet
+apps), offline app shell (service worker caches the shell; API is network-first
+with a cached fallback; the live stream, admin and personal wallet calls are never
+cached), update prompt, and alerts for watched agents.
 Security: strict CSP (no inline scripts or styles), same-origin only.
 
 When you change files in `static/`, bump `VERSION` in `static/sw.js` so
@@ -424,6 +433,10 @@ curl -X POST localhost:8080/v1/admin/propose -H "Authorization: Bearer $ADMIN_TO
   `POST /setup-transaction` is not used yet.
 - **Level 2 sub-wallets** (Base Sub Accounts + Spend Permissions, EIP-1271) are a
   `Signer` implementation away; Flash accepts EIP-1271 signatures.
+- **Other chains** are own-wallet only and ETH only (agents, copies and plans trade
+  on Base). The orders were quoted and checked for real on every chain, but no
+  real-money order has filled off Base yet. HyperEVM, Monad and Plasma are shown in
+  the ticker (prices, gas) without trading.
 - **Crypto is not constant-time.** Fine for small hackathon balances. For real
   money, move signing to a KMS/HSM via the `Signer` interface.
 - Flash response fields not fully documented publicly (`approveTx` shape,
@@ -459,6 +472,24 @@ docker run -d --name arena -p 8080:8080 \
 - **Health check:** `GET /healthz`. `GET /readyz` returns 503 until the price feed is fresh.
 - **Optional:** run `arkiv-sync` next to it and set `ARKIV_SYNC_URL`. Set
   `DISCORD_WEBHOOK_URL` or `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` for the signal bot.
+- **Outbound:** the server reads each chain's public RPC for the chains ticker and
+  other-chain balances (override with `RPC_URL_<CHAIN>`).
+
+**EC2 over SSH (`deploy.sh`):** builds the image locally (running the tests), uploads
+it, swaps the container and checks `/readyz`, rolling back on its own if the new one
+is not healthy. Config in `deploy.env` (copy `deploy.env.example`).
+
+```bash
+./deploy.sh --setup     # first time: install Docker on the box
+./deploy.sh             # build, upload, swap, health-check
+./deploy.sh --status    # what is running;  --logs, --rollback, --dry-run
+```
+
+`.env` and `wallets.json` are uploaded only if the server has none; `wallets.json` is
+never overwritten (it holds private keys) and `.env` only with `--push-env`.
+
+**Branches:** `main` is what runs in production; `staging` is for trying a change on a
+test deploy first (`git push origin main:staging` to update it).
 
 ## Tests
 
